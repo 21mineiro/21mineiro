@@ -25,7 +25,7 @@ App (PWA) para acompanhar desafios com amigos e treinos de academia, feito para 
   - **Painel do treinador**: lista de alunos, adesão, editar/adicionar treinos, refazer planilha, liberar acesso manual e chat.
   - Pagamento recorrente pelo **Mercado Pago** (assinaturas / preapproval).
   - A planilha é gerada por **IA (Claude)** com a ficha e as regras do treinador (`netlify/lib/ai-plan.mts`), em segundo plano
-    (`netlify/functions/plan-bg.mts`). Sem chave da IA, ou se ela falhar, usa o gerador padrão (`netlify/lib/running-plan.mts`).
+    (`netlify/functions/plan-bg.mts`). Sem chave da IA (opcional), ou se ela falhar, usa o gerador próprio no mesmo método, sem custo (`netlify/lib/running-plan.mts`).
   - Visão em lista ou grade semana × dia, download em PDF, Excel e CSV.
 
 ## Estrutura
@@ -46,7 +46,7 @@ netlify/database/migrations  tabelas do banco
 3. **Treinador**: `COACH_EMAILS` com os e-mails dos treinadores (separados por vírgula).
 4. **Mercado Pago**: `MP_ACCESS_TOKEN` (credencial de produção) e `MP_WEBHOOK_SECRET`. Em *Suas integrações → Webhooks*,
    cadastre `https://SEU-SITE/api/mp/webhook` com os eventos *Planos e assinaturas*.
-5. **IA**: `ANTHROPIC_API_KEY` (chave da API da Anthropic) para gerar as planilhas.
+5. **IA (opcional)**: `ANTHROPIC_API_KEY` para gerar as planilhas com IA. Sem ela, o app usa o gerador próprio.
 6. O banco é criado sozinho no deploy (pacote `@netlify/database`) e as migrações são aplicadas automaticamente.
 
 ## Desenvolvimento

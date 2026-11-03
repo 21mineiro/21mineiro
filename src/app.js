@@ -961,7 +961,7 @@ function planView(profile, sessions, today, { action = 'run-open', who = 'me' } 
         <div><b>${done}/${sessions.length}</b><span>treinos feitos</span></div>
         <div><b>${past.length ? Math.round((past.filter((s) => s.done).length / past.length) * 100) : 100}%</b><span>em dia</span></div>
       </div>
-      ${profile.time5k ? `<div class="muted" style="margin-top:10px">Previsão para a prova: <b>${esc(profile.prediction.time)}</b> (${esc(profile.prediction.pace)})${profile.target ? ` · meta: ${esc(profile.target)}` : ''}</div>` : ''}
+      ${profile.time5k && !meta?.resumo?.includes('Previsão') ? `<div class="muted" style="margin-top:10px">Previsão para a prova: <b>${esc(profile.prediction.time)}</b> (${esc(profile.prediction.pace)})${profile.target ? ` · meta: ${esc(profile.target)}` : ''}</div>` : ''}
     </div>
     <div class="card">
       <div class="name" style="margin-bottom:8px">Zonas de ritmo</div>

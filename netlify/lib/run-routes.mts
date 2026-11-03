@@ -146,12 +146,13 @@ function aiToSessions(plan: AiPlan, start: string) {
 
 async function rulesPlan(userId: string, today: string, error: string | null = null) {
   const p = await profileRow(userId);
-  const { sessions } = generatePlan({
-    goal: p.goal, level: p.level, weekdays: p.weekdays, longDay: p.long_day, time5k: p.time_5k,
-    raceDate: p.race_date, startDate: today, weeks: p.race_date ? undefined : p.weeks,
+  const { weeks, sessions, meta } = generatePlan({
+    goal: p.goal, level: p.level, daysPerWeek: p.days_per_week || 4, longDay: p.long_day, time5k: p.time_5k,
+    volumeKm: p.volume_km, weeks: p.weeks, startDate: p.start_date, raceDate: p.race_date, target: p.target_time,
   });
   await replaceSessions(userId, today, sessions);
-  await sql`UPDATE run_profiles SET plan_status = 'ready', plan_source = 'regras', plan_meta = NULL, plan_error = ${error} WHERE user_id = ${userId}`;
+  await sql`UPDATE run_profiles SET plan_status = 'ready', plan_source = 'regras', weeks = ${weeks},
+            plan_meta = ${JSON.stringify(meta)}::jsonb, plan_error = ${error} WHERE user_id = ${userId}`;
 }
 
 // Chamada pela função de segundo plano: gera com IA e, se falhar, usa o gerador de reserva
