@@ -217,6 +217,77 @@ function checkRecord(log, ex, set) {
   toast(`🏆 Recorde pessoal! ${ex.name}: ${fmtNum(Number(set.weight))} kg (antes ${fmtNum(prev.kg)} kg)`, 3500);
 }
 
+// ---------- Medidas e peso ----------
+const MEASURES = [['weight', 'Peso', 'kg'], ['waist', 'Cintura', 'cm'], ['hip', 'Quadril', 'cm'], ['chest', 'Peito', 'cm'], ['arm', 'Braço', 'cm'], ['thigh', 'Coxa', 'cm']];
+const photoSrc = (k) => `/api/photos?key=${encodeURIComponent(k)}`;
+
+function measuresSection(list, mine) {
+  const withW = list.filter((m) => m.weight);
+  const first = (f) => list.find((m) => m[f]);
+  const last = (f) => [...list].reverse().find((m) => m[f]);
+  const photos = list.filter((m) => m.photo);
+  const rows = MEASURES.map(([f, label, unit]) => {
+    const a = first(f), b = last(f);
+    if (!b) return '';
+    const diff = a && a !== b ? +(b[f] - a[f]).toFixed(1) : null;
+    return `<div class="ms-row"><span class="grow">${label}</span><b>${fmtNum(b[f])}<small> ${unit}</small></b>${diff !== null ? `<span class="ms-diff ${diff < 0 ? 'down' : diff > 0 ? 'up' : ''}">${diff > 0 ? '+' : ''}${fmtNum(diff)}</span>` : '<span class="ms-diff"></span>'}</div>`;
+  }).join('');
+  if (!list.length && !mine) return '';
+  return `
+    <h2>Medidas e peso</h2>
+    <div class="card">
+      ${list.length ? `
+        ${withW.length >= 2 ? lineChart(withW.map((m) => ({ x: fmtDate(m.day), value: m.weight, tip: `${fmtNum(m.weight)} kg|${fmtDate(m.day, { day: '2-digit', month: 'short', year: 'numeric' })}` })), { unit: ' kg', height: 150, title: 'Peso ao longo do tempo' }) : ''}
+        <div class="ms-list">${rows}</div>
+        <div class="muted" style="margin-top:6px">Diferença desde a primeira medida (${fmtDate(list[0].day, { day: '2-digit', month: 'short' })})</div>
+        ${photos.length >= 1 ? `
+          <div class="ms-photos">
+            <figure><img loading="lazy" src="${photoSrc(photos[0].photo)}" alt="Antes" data-action="photo"><figcaption>Antes · ${fmtDate(photos[0].day, { day: '2-digit', month: 'short' })}</figcaption></figure>
+            ${photos.length >= 2 ? `<figure><img loading="lazy" src="${photoSrc(photos[photos.length - 1].photo)}" alt="Depois" data-action="photo"><figcaption>Agora · ${fmtDate(photos[photos.length - 1].day, { day: '2-digit', month: 'short' })}</figcaption></figure>` : '<figure class="ms-empty"><span>Registre outra foto mais pra frente para comparar</span></figure>'}
+          </div>` : ''}
+      ` : '<div class="muted">Registre seu peso e medidas de tempos em tempos (a cada 15 ou 30 dias) para ver sua evolução. A foto é opcional e só você e seu treinador veem.</div>'}
+      ${mine ? '<button class="btn-primary btn-block" data-action="measure-new" style="margin-top:12px">Registrar medidas</button>' : ''}
+    </div>`;
+}
+
+function openMeasure(day = todayStr()) {
+  const cur = (S.measures || []).find((m) => m.day === day) || {};
+  const prev = [...(S.measures || [])].reverse().find((m) => m.day < day) || {};
+  let photo = cur.photo || null;
+  openModal(`
+    <h3>Medidas e peso</h3>
+    <label class="field">Data<input name="day" type="date" value="${day}" max="${todayStr()}"></label>
+    <div class="ms-grid">
+      ${MEASURES.map(([f, label, unit]) => `<label class="field">${label} (${unit})<input name="${f}" type="number" inputmode="decimal" step="0.1" min="0" value="${cur[f] ?? ''}" placeholder="${prev[f] ? fmtNum(prev[f]) : ''}"></label>`).join('')}
+    </div>
+    <div class="field">Foto (opcional, só você e seu treinador veem)
+      <div id="photo-box">${photo ? `<img class="photo" src="${photoSrc(photo)}" alt="">` : ''}</div>
+      <label class="btn btn-block" style="text-align:center">${photo ? 'Trocar foto' : 'Adicionar foto'}<input type="file" accept="image/*" hidden data-m="file"></label>
+    </div>
+    <div class="actions"><button value="cancel" formnovalidate>Cancelar</button><button class="btn-primary" value="ok">Salvar</button></div>`, {
+    onSubmit(f) {
+      const body = { day: f.get('day') || day, photo };
+      for (const [k] of MEASURES) body[k] = f.get(k);
+      api('measures', { method: 'PUT', body })
+        .then(() => { toast('Medidas salvas ✅'); return reload(); })
+        .catch((e) => toast(`⚠️ ${e.message}`));
+    },
+  });
+  $form.querySelector('[data-m=file]').onchange = async (ev) => {
+    const file = ev.target.files[0];
+    if (!file) return;
+    const box = $('#photo-box');
+    box.innerHTML = '<div class="muted">Enviando foto…</div>';
+    try {
+      const blob = await resizeImage(file);
+      const d = $form.querySelector('[name=day]').value || day;
+      const { key } = await api(`photos?kind=measure&day=${d}`, { method: 'POST', raw: blob });
+      photo = key;
+      box.innerHTML = `<img class="photo" src="${URL.createObjectURL(blob)}" alt="">`;
+    } catch (e) { box.innerHTML = `<div class="muted">⚠️ ${esc(e.message)}</div>`; }
+  };
+}
+
 // Avaliação ao concluir o treino
 function askFeeling(log) {
   openModal(`
@@ -969,6 +1040,8 @@ function coachUserView() {
     ${x.workouts.length ? `<button class="btn-block" data-action="tr-copy" style="margin-bottom:6px">Copiar este treino para outros alunos</button>` : ''}
     ${!hasCoach && x.workouts.length ? `<p class="muted" style="text-align:center">Os treinos acima foram escolhidos por ${esc(firstName(x.user.name))}. Ao montar um treino para ela, eles são substituídos.</p>` : ''}
 
+    ${(x.measures || []).length ? measuresSection(x.measures, false) : ''}
+
     <h2>O que treinou · 90 dias</h2>
     ${x.logs.length ? x.logs.slice(0, 40).map((l) => `
       <div class="card">
@@ -1173,6 +1246,8 @@ function viewProfile() {
         <div class="xp-txt">${fmtNum(xp)} de energia${lv.next ? ` · faltam ${fmtNum(lv.toNext)} para ${lv.next.icon} ${lv.next.name}` : ' · nível máximo!'}</div>
       </div>
     </div>
+
+    ${measuresSection(S.measures || [], true)}
 
     ${(() => {
       const prs = Object.values(personalRecords()).sort((a, b) => (a.day < b.day ? 1 : -1)).slice(0, 8);
@@ -2421,6 +2496,7 @@ $view.addEventListener('click', (ev) => {
     case 'tr-edit': return openWorkoutForm(coachUser.workouts.find((x) => x.id === d.id), coachCtx());
     case 'tr-apply': return coachApplyProgram();
     case 'tr-copy': return coachCopyWorkouts();
+    case 'measure-new': return openMeasure();
     case 'tr-mode': coachMode = d.v; store.set('coach-mode', coachMode); coachUsers = null; return render();
     case 'tr-pick': return openPickAthletes(d.v);
     case 'tr-invite': return openCoachInvite();

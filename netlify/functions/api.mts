@@ -83,6 +83,7 @@ async function getState(me: Me) {
     workouts: workouts.map((w: any) => ({ id: w.id, name: w.name, weekdays: w.weekdays, exercises: w.exercises })),
     logs: logs.map(logOut),
     catalog: await sql`SELECT id, name, video, tip, reviewed FROM exercises ORDER BY lower(name)`,
+    measures: (await sql`SELECT to_char(day, 'YYYY-MM-DD') AS day, weight, waist, hip, chest, arm, thigh, photo_key FROM measurements WHERE user_id = ${me.id} ORDER BY day`).map(measureOut),
   };
 }
 
@@ -113,6 +114,17 @@ function workoutIn(body: any) {
     ...(e.tip ? { tip: String(e.tip).trim().slice(0, 240) } : {}),
   }));
   return { name: String(body.name || 'Treino').slice(0, 80), weekdays, exercises, position: Number(body.position) || 0 };
+}
+
+const MEASURE_FIELDS = ['weight', 'waist', 'hip', 'chest', 'arm', 'thigh'] as const;
+const measureOut = (m: any) => ({ day: m.day, ...Object.fromEntries(MEASURE_FIELDS.map((f) => [f, m[f] === null ? null : Number(m[f])])), photo: m.photo_key || null });
+async function canSeeUser(me: any, userId: string) {
+  if (userId === me.id) return true;
+  const role = await roleOf(me.email);
+  if (role.owner) return true;
+  if (!role.coach) return false;
+  const [u] = await sql`SELECT lower(coach_email) AS ce FROM users WHERE id = ${userId}`;
+  return !!u && u.ce === String(me.email || '').toLowerCase();
 }
 
 // Só vale exercício que está no catálogo
@@ -197,6 +209,9 @@ export default async (req: Request, context: Context) => {
       // fotos do diário
       const photos = await sql`SELECT photo_key FROM checkins WHERE user_id = ${me.id} AND photo_key IS NOT NULL`;
       for (const p of photos) await getStore('photos').delete(p.photo_key).catch(() => {});
+      const mphotos = await sql`SELECT photo_key FROM measurements WHERE user_id = ${me.id} AND photo_key IS NOT NULL`;
+      for (const p of mphotos) await getStore('photos').delete(p.photo_key).catch(() => {});
+      await sql`DELETE FROM measurements WHERE user_id = ${me.id}`;
       // desafios criados pela pessoa: passam para outro participante; sem ninguém, são apagados
       const owned = await sql`SELECT id FROM challenges WHERE owner_id = ${me.id}`;
       for (const c of owned) {
@@ -349,6 +364,15 @@ export default async (req: Request, context: Context) => {
     }
 
     // Fotos (Netlify Blobs). Só participantes do desafio podem ver.
+    if (res === 'photos' && method === 'POST' && url.searchParams.get('kind') === 'measure') {
+      const day = url.searchParams.get('day');
+      if (!isDay(day)) return err('Data inválida');
+      const data = await req.arrayBuffer();
+      if (data.byteLength > 4 * 1024 * 1024) return err('Foto muito grande');
+      const key = `m/${me.id}/${day}-${rid().slice(0, 8)}.jpg`;
+      await getStore('photos').set(key, data, { metadata: { type: req.headers.get('content-type') || 'image/jpeg' } });
+      return json({ key });
+    }
     if (res === 'photos' && method === 'POST') {
       const challengeId = url.searchParams.get('challengeId') || '';
       const day = url.searchParams.get('day');
@@ -361,11 +385,32 @@ export default async (req: Request, context: Context) => {
     }
     if (res === 'photos' && method === 'GET') {
       const key = url.searchParams.get('key') || '';
-      const challengeId = key.split('/')[0];
-      if (!(await isMember(challengeId, me.id))) return err('Sem acesso', 403);
+      const [first, owner] = key.split('/');
+      if (first === 'm') { if (!(await canSeeUser(me, owner))) return err('Sem acesso', 403); }
+      else if (!(await isMember(first, me.id))) return err('Sem acesso', 403);
       const blob = await getStore('photos').get(key, { type: 'arrayBuffer' });
       if (!blob) return err('Não encontrada', 404);
       return new Response(blob, { headers: { 'content-type': 'image/jpeg', 'cache-control': 'private, max-age=31536000, immutable' } });
+    }
+
+    // Medidas e peso
+    if (res === 'measures' && method === 'PUT') {
+      const day = body.day;
+      if (!isDay(day)) return err('Data inválida');
+      const v = (f: string) => { const n = Number(String(body[f] ?? '').replace(',', '.')); return n > 0 && n < 1000 ? Math.round(n * 10) / 10 : null; };
+      const photo = typeof body.photo === 'string' && body.photo.startsWith(`m/${me.id}/`) ? body.photo : null;
+      const [old] = await sql`SELECT photo_key FROM measurements WHERE user_id = ${me.id} AND day = ${day}`;
+      if (old?.photo_key && old.photo_key !== photo) await getStore('photos').delete(old.photo_key).catch(() => {});
+      if (!MEASURE_FIELDS.some((f) => v(f) !== null) && !photo) {
+        await sql`DELETE FROM measurements WHERE user_id = ${me.id} AND day = ${day}`;
+        return json({ ok: true });
+      }
+      await sql`
+        INSERT INTO measurements (user_id, day, weight, waist, hip, chest, arm, thigh, photo_key, updated_at)
+        VALUES (${me.id}, ${day}, ${v('weight')}, ${v('waist')}, ${v('hip')}, ${v('chest')}, ${v('arm')}, ${v('thigh')}, ${photo}, NOW())
+        ON CONFLICT (user_id, day) DO UPDATE SET weight = EXCLUDED.weight, waist = EXCLUDED.waist, hip = EXCLUDED.hip,
+          chest = EXCLUDED.chest, arm = EXCLUDED.arm, thigh = EXCLUDED.thigh, photo_key = EXCLUDED.photo_key, updated_at = NOW()`;
+      return json({ ok: true });
     }
 
     // Treinos
@@ -455,7 +500,8 @@ export default async (req: Request, context: Context) => {
         const logs = await sql`
           SELECT to_char(day, 'YYYY-MM-DD') AS day, workout_id, workout_name, finished, exercises, cardio, feeling
           FROM workout_logs WHERE user_id = ${sid} AND day > ${today}::date - 90 ORDER BY day DESC`;
-        return json({ user: u, workouts: workouts.map((w: any) => ({ id: w.id, name: w.name, weekdays: w.weekdays, exercises: w.exercises })), logs: logs.map(logOut) });
+        const measures = await sql`SELECT to_char(day, 'YYYY-MM-DD') AS day, weight, waist, hip, chest, arm, thigh, photo_key FROM measurements WHERE user_id = ${sid} ORDER BY day`;
+        return json({ user: u, workouts: workouts.map((w: any) => ({ id: w.id, name: w.name, weekdays: w.weekdays, exercises: w.exercises })), logs: logs.map(logOut), measures: measures.map(measureOut) });
       }
       // Treinos montados pelo treinador para um aluno (id começa com "co-")
       if (sub === 'workouts' && sid && method === 'PUT') {
