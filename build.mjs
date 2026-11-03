@@ -4,7 +4,7 @@ import { cpSync, mkdirSync, rmSync } from 'node:fs';
 
 rmSync('dist', { recursive: true, force: true });
 mkdirSync('dist');
-for (const f of ['index.html', 'styles.css', 'sw.js', 'manifest.json', 'icon.svg', 'icon-180.png', 'icon-192.png', 'icon-512.png']) cpSync(`src/${f}`, `dist/${f}`);
+for (const f of ['index.html', 'styles.css', 'sw.js', 'manifest.json', 'icon.svg', 'icon-180.png', 'icon-192.png', 'icon-512.png', 'favicon.svg', 'og.png']) cpSync(`src/${f}`, `dist/${f}`);
 // Fonte própria (sem depender do Google Fonts)
 mkdirSync('dist/fonts');
 cpSync('node_modules/@fontsource-variable/space-grotesk/files/space-grotesk-latin-wght-normal.woff2', 'dist/fonts/space-grotesk.woff2');

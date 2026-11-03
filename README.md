@@ -34,7 +34,7 @@ App (PWA) para acompanhar desafios com amigos e treinos de academia, feito para 
 
 - Fundo de aurora, cartões de vidro, gradiente alto astral e fonte Space Grotesk (embutida no app).
 - Tema claro, escuro ou automático; respeita "reduzir movimento" do celular.
-- **Hoje:** anel do dia (tarefas feitas), maior sequência, nível de energia, conquistas e frase do dia (ditados populares).
+- **Hoje:** anel do dia (tarefas feitas), maior sequência, nível de energia, conquistas e frase do dia (versículos e frases de atletas e pessoas que inspiram).
 - **Energia e níveis:** cada dia marcado, treino e corrida soma energia (Faísca → Chama → Cometa → … → Lenda Astral).
 - **Painéis:** indicadores com minigráficos, mapa de calor ("constelação") das últimas 16 semanas, atividades por semana,
   volume de corrida planejado × feito, evolução de carga com toque no gráfico e "Ver dados" em tabela.
