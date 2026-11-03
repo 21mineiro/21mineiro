@@ -26,9 +26,12 @@ export default async () => {
       JOIN challenge_members m ON m.challenge_id = c.id AND m.user_id = ${u.id}
       WHERE ${today}::date BETWEEN c.start_date AND c.start_date + (c.days - 1)
         AND NOT EXISTS (SELECT 1 FROM checkins k WHERE k.challenge_id = c.id AND k.user_id = ${u.id} AND k.day = ${today}::date)`;
-    if (!pending.length) continue;
+    const [run] = await sql`SELECT title FROM run_sessions WHERE user_id = ${u.id} AND day = ${today}::date AND NOT done LIMIT 1`;
+    if (!pending.length && !run) continue;
 
-    const body = pending.length === 1
+    const body = !pending.length
+      ? `🏃 Corrida de hoje: ${run.title}`
+      : pending.length === 1
       ? `${pending[0].emoji} ${pending[0].name} ainda não foi marcado hoje.`
       : `Você tem ${pending.length} desafios para marcar hoje.`;
     const subs = await sql`SELECT endpoint, subscription FROM push_subscriptions WHERE user_id = ${u.id}`;

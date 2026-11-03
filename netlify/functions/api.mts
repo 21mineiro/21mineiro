@@ -3,6 +3,7 @@ import { getUser } from '@netlify/identity';
 import { getDatabase } from '@netlify/database';
 import { getStore } from '@netlify/blobs';
 import { sendPush } from '../lib/push.mts';
+import { handleRun, handleMpWebhook } from '../lib/run-routes.mts';
 
 const db = getDatabase();
 const sql = db.sql;
@@ -115,6 +116,9 @@ async function syncWorkoutChallenges(userId: string, day: string) {
 /* ---------- Roteador ---------- */
 
 export default async (req: Request, context: Context) => {
+  // Avisos do Mercado Pago chegam sem login
+  if (new URL(req.url).pathname === '/api/mp/webhook' && req.method === 'POST') return handleMpWebhook(req);
+
   // Só no "netlify dev" (local), onde o login do Google não funciona: aceita um usuário de teste
   const devUser = Netlify.env.get('NETLIFY_DEV') === 'true' ? req.headers.get('x-dev-user') : null;
   const user = devUser ? JSON.parse(devUser) : await getUser();
@@ -131,6 +135,9 @@ export default async (req: Request, context: Context) => {
   try {
     // Estado
     if (res === 'state' && method === 'GET') return json(await getState(me));
+
+    // Planilha de corrida (assinatura)
+    if (res === 'run') return await handleRun(req, url, parts, me, body);
 
     // Preferências (lembrete)
     if (res === 'me' && method === 'PUT') {

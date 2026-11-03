@@ -154,7 +154,7 @@ input[type=checkbox] { width: auto; }
 
 .tabs {
   position: fixed; bottom: 0; left: 0; right: 0; z-index: 10;
-  display: grid; grid-template-columns: repeat(4, 1fr);
+  display: grid; grid-template-columns: repeat(5, 1fr);
   background: var(--nav); border-top: 1px solid var(--line);
   padding-bottom: env(safe-area-inset-bottom);
 }
@@ -230,3 +230,39 @@ dialog h3 { margin: 0 0 14px; }
 body.logged-out .tabs { display: none; }
 [hidden] { display: none !important; }
 label.btn { display: inline-block; }
+
+/* Corrida */
+.plans { display: grid; gap: 12px; }
+.plan { border: 2px solid var(--line); }
+.plan.featured { border-color: var(--accent2); }
+.plan .price { font-size: 28px; font-weight: 800; margin: 4px 0; }
+.plan .price small { font-size: 14px; color: var(--muted); font-weight: 400; }
+.plan ul { margin: 8px 0 12px; padding-left: 20px; font-size: 14px; line-height: 1.6; }
+.hero { text-align: center; padding: 8px 0 16px; }
+.hero .big { font-size: 44px; }
+.banner { background: color-mix(in srgb, var(--accent2) 15%, var(--card)); border: 1px solid var(--accent2); }
+.run { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-top: 1px solid var(--line); cursor: pointer; }
+.run:first-of-type { border-top: 0; }
+.run .day { width: 44px; text-align: center; font-size: 12px; color: var(--muted); flex: none; }
+.run .day b { display: block; font-size: 18px; color: var(--text); }
+.run.today .day b { color: var(--accent2); }
+.run.done .t { color: var(--muted); }
+.run .t { font-weight: 600; font-size: 15px; }
+.run .chk { font-size: 20px; flex: none; }
+.type { display: inline-block; font-size: 11px; padding: 2px 7px; border-radius: 99px; background: var(--card2); color: var(--muted); }
+.type-intervalado { background: #fde68a; color: #78350f; }
+.type-ritmo { background: #fed7aa; color: #7c2d12; }
+.type-longo { background: #bfdbfe; color: #1e3a8a; }
+.type-prova { background: #fecaca; color: #7f1d1d; }
+.type-regenerativo { background: #d1fae5; color: #065f46; }
+.zones { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: 14px; }
+.zones span:nth-child(odd) { color: var(--muted); }
+.note { background: color-mix(in srgb, var(--accent2) 12%, var(--card)); border-left: 3px solid var(--accent2); padding: 8px 10px; border-radius: 6px; margin: 10px 0; font-size: 14px; white-space: pre-wrap; }
+.desc { white-space: pre-wrap; font-size: 14px; line-height: 1.5; }
+.chat { display: flex; flex-direction: column; gap: 6px; max-height: 340px; overflow-y: auto; margin-bottom: 10px; }
+.msg { max-width: 82%; padding: 8px 11px; border-radius: 14px; background: var(--card2); font-size: 14px; white-space: pre-wrap; }
+.msg.mine { align-self: flex-end; background: var(--accent2); color: var(--accent2-ink); }
+.msg small { display: block; font-size: 10px; opacity: .7; margin-top: 2px; }
+.week summary { cursor: pointer; padding: 6px 0; font-weight: 600; }
+.unread { background: var(--danger); color: #fff; border-radius: 99px; font-size: 11px; padding: 1px 7px; font-weight: 700; }
+.back { background: none; padding: 4px 0; color: var(--accent2); margin-bottom: 8px; }

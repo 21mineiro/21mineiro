@@ -82,7 +82,8 @@ let S = null;           // dados vindos do servidor
 let tab = store.get('tab', 'hoje');
 
 async function reload() {
-  S = await api('state');
+  const [state] = await Promise.all([api('state'), loadRun()]);
+  S = state;
   render();
 }
 
@@ -238,7 +239,7 @@ function checkNewBadges() {
 /* ================= Renderização ================= */
 
 const $view = $('#view');
-const TITLES = { hoje: 'Hoje', desafios: 'Desafios', treinos: 'Treinos', perfil: 'Perfil' };
+const TITLES = { hoje: 'Hoje', desafios: 'Desafios', treinos: 'Treinos', corrida: 'Corrida', perfil: 'Perfil' };
 
 function render() {
   if (!S) return;
@@ -246,7 +247,7 @@ function render() {
   document.querySelectorAll('.tabs button').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
   $('#title').textContent = TITLES[tab];
   $('#today').textContent = fmtDate(todayStr(), { weekday: 'long', day: '2-digit', month: 'long' });
-  $view.innerHTML = { hoje: viewToday, desafios: viewChallenges, treinos: viewWorkouts, perfil: viewProfile }[tab]();
+  $view.innerHTML = ({ hoje: viewToday, desafios: viewChallenges, treinos: viewWorkouts, corrida: viewRun, perfil: viewProfile }[tab] || viewToday)();
   checkNewBadges();
 }
 
@@ -348,6 +349,7 @@ function viewToday() {
   return `
     <h2>Desafios ativos</h2>
     ${active.length ? active.map((c) => challengeToday(c, today)).join('') : `<div class="card empty">Nenhum desafio ativo.<br><br><button class="btn-primary" data-action="new-challenge">+ Criar desafio</button> <button data-action="join">Entrar com código</button></div>`}
+    ${runTodayCard(today)}
     <h2>Treino de hoje (${WEEKDAYS[parseDate(today).getDay()]})</h2>
     ${list.length ? list.map((w) => workoutCard(today, w)).join('') : `<div class="card empty">${S.workouts.length ? 'Dia de descanso 😴' : 'Cadastre seus treinos na aba Treinos.'}</div>`}
     ${S.workouts.length ? `<button class="btn-block" data-action="pick-workout" data-day="${today}">+ Fazer outro treino hoje</button>` : ''}
@@ -891,6 +893,412 @@ function setReminder(hour) {
   return api('me', { method: 'PUT', body: { reminderHour: hour, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone } });
 }
 
+/* ================= Corrida (planilha por assinatura) ================= */
+
+let R = null;                         // estado da corrida
+let runMode = store.get('run-mode', 'me'); // me | alunos (treinador)
+let coachList = null, coachAthlete = null;
+
+const GOALS = { '5k': '5 km', '10k': '10 km', '21k': 'Meia maratona (21 km)', '42k': 'Maratona (42 km)' };
+const LEVELS = { iniciante: 'Iniciante', intermediario: 'Intermediário', avancado: 'Avançado' };
+const TYPES = { leve: 'Leve', longo: 'Longão', intervalado: 'Intervalado', ritmo: 'Ritmo', regenerativo: 'Regenerativo', prova: 'Prova' };
+const money = (n) => `R$ ${n}`;
+
+let runError = null;
+async function loadRun() {
+  try { R = await api(`run/state?today=${todayStr()}`); runError = null; } catch (e) { R = null; runError = e.message; }
+}
+const runApi = (path, opts = {}) => api(`run/${path}`, { ...opts, body: opts.method && opts.method !== 'GET' && opts.method !== 'DELETE' ? { ...(opts.body || {}), today: todayStr() } : opts.body });
+
+const typeChip = (t) => `<span class="type type-${t}">${TYPES[t] || esc(t)}</span>`;
+const fmtSec = (s) => (s ? `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}` : '');
+const parseMMSS = (v) => { const m = String(v || '').trim().match(/^(\d{1,3}):(\d{2})$/); return m ? Number(m[1]) * 60 + Number(m[2]) : null; };
+
+function runRow(s, today, action = 'run-open') {
+  const d = parseDate(s.day);
+  return `
+    <div class="run ${s.done ? 'done' : ''} ${s.day === today ? 'today' : ''}" data-action="${action}" data-id="${s.id}">
+      <div class="day">${WEEKDAYS[d.getDay()]}<b>${d.getDate()}</b></div>
+      <div class="grow">
+        <div class="t">${esc(s.title)}</div>
+        <div class="muted">${typeChip(s.type)} ${s.distanceKm ? `${fmtNum(s.distanceKm)} km` : ''} ${s.pace ? `· ${esc(s.pace)}` : ''}${s.coachNote ? ' · 💬' : ''}</div>
+      </div>
+      <span class="chk">${s.done ? '✅' : s.day < today ? '⚪' : ''}</span>
+    </div>`;
+}
+
+function weeksOf(sessions) {
+  const map = new Map();
+  for (const s of sessions) { if (!map.has(s.week)) map.set(s.week, []); map.get(s.week).push(s); }
+  return [...map.entries()];
+}
+
+function planView(profile, sessions, today, { action = 'run-open' } = {}) {
+  const cur = sessions.find((s) => s.day >= today) || sessions[sessions.length - 1];
+  const curWeek = cur?.week || 1;
+  const past = sessions.filter((s) => s.day < today);
+  const done = sessions.filter((s) => s.done).length;
+  const z = profile.paces;
+  const daysToRace = profile.raceDate ? diffDays(today, profile.raceDate) : null;
+  return `
+    <div class="card">
+      <div class="row between">
+        <div><div class="name">🎯 ${GOALS[profile.goal]}</div>
+          <div class="muted">${LEVELS[profile.level]} · ${profile.weeks} semanas${profile.raceDate ? ` · prova ${fmtDate(profile.raceDate)}` : ''}</div></div>
+        ${daysToRace !== null && daysToRace >= 0 ? `<div style="text-align:center"><b style="font-size:22px">${daysToRace}</b><div class="muted">dias</div></div>` : ''}
+      </div>
+      <div class="bar"><i style="width:${Math.round((done / Math.max(1, sessions.length)) * 100)}%"></i></div>
+      <div class="stats" style="grid-template-columns:repeat(3,1fr)">
+        <div><b>${curWeek}/${profile.weeks}</b><span>semana · ${esc(cur?.phase || '')}</span></div>
+        <div><b>${done}/${sessions.length}</b><span>treinos feitos</span></div>
+        <div><b>${past.length ? Math.round((past.filter((s) => s.done).length / past.length) * 100) : 100}%</b><span>em dia</span></div>
+      </div>
+      <div class="muted" style="margin-top:10px">Previsão para a prova: <b>${esc(profile.prediction.time)}</b> (${esc(profile.prediction.pace)})</div>
+    </div>
+    <div class="card">
+      <div class="name" style="margin-bottom:8px">Seus ritmos</div>
+      <div class="zones">
+        <span>Regenerativo</span><span>${esc(z.regenerativo)}</span>
+        <span>Leve</span><span>${esc(z.leve)}</span>
+        <span>Longão</span><span>${esc(z.longo)}</span>
+        <span>Ritmo (limiar)</span><span>${esc(z.ritmo)}</span>
+        <span>Intervalado</span><span>${esc(z.intervalado)}</span>
+      </div>
+    </div>
+    <h2>Planilha</h2>
+    <div class="card">
+      ${weeksOf(sessions).map(([w, list]) => `
+        <details class="week" ${w === curWeek ? 'open' : ''}>
+          <summary>Semana ${w} <span class="muted">· ${esc(list[0].phase || '')} · ${fmtNum(list.reduce((t, s) => t + (s.distanceKm || 0), 0))} km</span></summary>
+          ${list.map((s) => runRow(s, today, action)).join('')}
+        </details>`).join('') || '<div class="empty">Nenhum treino na planilha.</div>'}
+    </div>`;
+}
+
+function chatView(messages, sendAction, placeholder) {
+  return `
+    <div class="chat" id="chat">
+      ${messages.length ? messages.map((m) => `<div class="msg ${m.authorId === myId() ? 'mine' : ''}">${esc(m.body)}<small>${esc(m.author)} · ${new Date(m.at).toLocaleString('pt-BR', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</small></div>`).join('') : '<div class="muted">Nenhuma mensagem ainda.</div>'}
+    </div>
+    <div class="row"><input id="chat-input" placeholder="${esc(placeholder)}" maxlength="2000"><button class="btn-blue" data-action="${sendAction}">Enviar</button></div>`;
+}
+
+function plansView() {
+  const a = R.access;
+  const trial = !a.trialUsed;
+  const card = (id, featured, items) => `
+    <div class="card plan ${featured ? 'featured' : ''}">
+      <div class="row between"><div class="name">${R.plans[id].name}</div>${featured ? '<span class="chip on">Mais completo</span>' : ''}</div>
+      <div class="price">${money(R.plans[id].price)}<small>/mês</small></div>
+      <ul>${items.map((i) => `<li>${i}</li>`).join('')}</ul>
+      ${trial
+        ? `<button class="btn-block ${featured ? 'btn-blue' : 'btn-primary'}" data-action="run-trial" data-plan="${id}">Testar ${R.trialDays} dias grátis</button>`
+        : `<button class="btn-block ${featured ? 'btn-blue' : 'btn-primary'}" data-action="run-subscribe" data-plan="${id}">Assinar ${R.plans[id].name}</button>`}
+    </div>`;
+  return `
+    <div class="hero"><div class="big">🏃</div>
+      <div class="name" style="font-size:20px">Planilha de corrida personalizada</div>
+      <div class="muted">Do 5 km à maratona, com ritmos calculados para você.</div></div>
+    ${a.status === 'pending' ? `<div class="card banner">⏳ Estamos aguardando a confirmação do pagamento.<br><button class="btn-small" style="margin-top:8px" data-action="run-refresh">Já paguei, atualizar</button></div>` : ''}
+    ${a.trialUsed && a.status !== 'pending' ? '<div class="card banner">Seu acesso terminou. Assine para continuar com a sua planilha.</div>' : ''}
+    <div class="plans">
+      ${card('basico', false, ['Planilha montada pelo seu objetivo e nível', 'Ritmos de treino personalizados', 'Treino do dia na tela inicial', 'Registro de km, tempo e esforço'])}
+      ${card('premium', true, ['Tudo do Básico', 'Treinador revisa e ajusta sua planilha', 'Chat direto com o treinador', 'Comentários do treinador em cada treino'])}
+    </div>
+    <p class="muted" style="text-align:center">Pagamento mensal pelo Mercado Pago. Cancele quando quiser.</p>`;
+}
+
+function questionnaire(p = {}) {
+  const wd = p.weekdays || [2, 4, 0];
+  return `
+    <label class="field">Objetivo
+      <select name="goal">${Object.entries(GOALS).map(([k, v]) => `<option value="${k}" ${p.goal === k ? 'selected' : ''}>${v}</option>`).join('')}</select>
+    </label>
+    <label class="field">Nível
+      <select name="level">${Object.entries(LEVELS).map(([k, v]) => `<option value="${k}" ${p.level === k ? 'selected' : ''}>${v}</option>`).join('')}</select>
+    </label>
+    <div class="field">Dias em que você pode correr
+      <div class="chips">${WEEKDAYS.map((d, i) => `<label class="chip ${wd.includes(i) ? 'on' : ''}"><input type="checkbox" name="wd" value="${i}" ${wd.includes(i) ? 'checked' : ''} hidden>${d}</label>`).join('')}</div>
+    </div>
+    <label class="field">Dia do longão
+      <select name="longDay">${WEEKDAYS.map((d, i) => `<option value="${i}" ${(p.longDay ?? 0) === i ? 'selected' : ''}>${d}</option>`).join('')}</select>
+    </label>
+    <div class="row">
+      <label class="field grow">Seu tempo atual nos 5 km<input name="time5k" placeholder="ex. 28:30" value="${fmtSec(p.time5k)}" inputmode="numeric"></label>
+      <label class="field grow">Data da prova<input name="raceDate" type="date" value="${p.raceDate || ''}"></label>
+    </div>
+    <label class="field">Observações (lesões, limitações, horários)<textarea name="notes" rows="2">${esc(p.notes || '')}</textarea></label>
+    <div class="muted" style="font-size:12px">Não sabe seu tempo de 5 km? Deixe em branco que usamos uma média para o seu nível.</div>`;
+}
+
+function readQuestionnaire(f) {
+  return {
+    goal: f.get('goal'), level: f.get('level'), weekdays: f.getAll('wd').map(Number), longDay: Number(f.get('longDay')),
+    time5k: parseMMSS(f.get('time5k')), raceDate: f.get('raceDate') || null, notes: f.get('notes').trim(),
+  };
+}
+
+function chipToggle(ev) { if (ev.target.name === 'wd') ev.target.parentElement.classList.toggle('on', ev.target.checked); }
+
+function openQuestionnaire(p, onSave, title = 'Refazer planilha') {
+  openModal(`<h3>${title}</h3>${questionnaire(p)}
+    <div class="muted" style="margin:8px 0">Os treinos de hoje em diante serão gerados de novo. Os já feitos ficam no histórico.</div>
+    <div class="actions"><button value="cancel" formnovalidate>Cancelar</button><button class="btn-primary" value="ok">Gerar planilha</button></div>`, {
+    onSubmit(f) {
+      const data = readQuestionnaire(f);
+      if (data.weekdays.length < 2) { toast('Escolha pelo menos 2 dias'); return false; }
+      onSave(data);
+    },
+    onClick: chipToggle,
+  });
+}
+
+function myRunView(today) {
+  const a = R.access;
+  if (!a.active) return plansView();
+  if (!R.profile) {
+    return `
+      ${a.trialDaysLeft ? `<div class="card banner">🎁 Teste grátis do plano ${R.plans[a.plan].name}: faltam ${a.trialDaysLeft} dias.</div>` : ''}
+      <h2>Monte sua planilha</h2>
+      <form class="card" id="run-q">${questionnaire()}<button type="button" class="btn-primary btn-block" data-action="run-generate" style="margin-top:6px">Gerar minha planilha</button></form>`;
+  }
+  const premium = a.plan === 'premium';
+  return `
+    ${a.trialDaysLeft ? `<div class="card banner row between"><span>🎁 Teste grátis: faltam <b>${a.trialDaysLeft} dias</b></span><button class="btn-small btn-blue" data-action="run-subscribe" data-plan="${a.plan}">Assinar</button></div>` : ''}
+    ${planView(R.profile, R.sessions, today)}
+    <h2>💬 Treinador</h2>
+    <div class="card">
+      ${premium ? chatView(R.messages, 'run-send', 'Escreva para o treinador…')
+        : `<div class="muted">Converse com o treinador e receba ajustes na sua planilha no plano Premium (${money(R.plans.premium.price)}/mês).</div>
+           <button class="btn-block btn-blue" style="margin-top:10px" data-action="run-subscribe" data-plan="premium">Mudar para Premium</button>`}
+    </div>
+    <div class="row" style="margin-top:4px">
+      <button class="grow" data-action="run-redo">🔄 Refazer planilha</button>
+      ${a.hasPayment || a.status === 'trial' ? '<button class="grow" data-action="run-manage">Assinatura</button>' : ''}
+    </div>`;
+}
+
+function coachListView() {
+  if (!coachList) { loadCoachList(); return '<div class="empty">Carregando alunos…</div>'; }
+  if (!coachList.length) return '<div class="empty">Nenhum aluno ainda. Quando alguém começar o teste ou assinar, aparece aqui.</div>';
+  const label = (a) => (a.status === 'trial' ? `Teste · ${a.trialDaysLeft}d` : a.active ? R.plans[a.plan].name : a.status === 'pending' ? 'Pagamento pendente' : 'Inativo');
+  return coachList.map((x) => `
+    <div class="card row" data-action="coach-open" data-id="${x.id}" style="cursor:pointer">
+      ${avatar(x, 40)}
+      <div class="grow">
+        <div class="name">${esc(x.name)} ${x.unread ? `<span class="unread">${x.unread}</span>` : ''}</div>
+        <div class="muted">${x.goal ? GOALS[x.goal] : 'Sem planilha'}${x.raceDate ? ` · prova ${fmtDate(x.raceDate)}` : ''}</div>
+        <div class="muted">Últimos 28 dias: ${x.done}/${x.past} treinos${x.past ? ` (${Math.round((x.done / x.past) * 100)}%)` : ''}</div>
+      </div>
+      <span class="chip ${x.access.active ? (x.access.plan === 'premium' ? 'on' : 'ok') : ''}">${label(x.access)}</span>
+    </div>`).join('');
+}
+
+function coachAthleteView(today) {
+  const x = coachAthlete;
+  const a = x.access;
+  return `
+    <button class="back" data-action="coach-back">← Alunos</button>
+    <div class="card row">${avatar(x.user, 44)}<div class="grow"><div class="name">${esc(x.user.name)}</div><div class="muted">${esc(x.user.email)}</div></div>
+      <span class="chip ${a.active ? 'ok' : ''}">${a.active ? R.plans[a.plan].name : 'Inativo'}</span></div>
+    <div class="card">
+      <div class="muted" style="margin-bottom:6px">Acesso manual (ex.: pagou por Pix direto)</div>
+      <div class="row"><button class="grow btn-small" data-action="coach-access" data-plan="basico">Liberar Básico</button>
+        <button class="grow btn-small" data-action="coach-access" data-plan="premium">Liberar Premium</button>
+        <button class="btn-small btn-danger" data-action="coach-access" data-status="cancelled">Bloquear</button></div>
+    </div>
+    ${x.profile ? `${x.profile.notes ? `<div class="note">📋 ${esc(x.profile.notes)}</div>` : ''}${planView(x.profile, x.sessions, today, { action: 'coach-session' })}` : '<div class="card empty">Este aluno ainda não preencheu o questionário.</div>'}
+    <div class="row" style="margin-bottom:12px">
+      <button class="grow" data-action="coach-add">+ Adicionar treino</button>
+      <button class="grow" data-action="coach-redo">🔄 Gerar planilha</button>
+    </div>
+    <h2>💬 Conversa</h2>
+    <div class="card">${chatView(x.messages, 'coach-send', `Mensagem para ${x.user.name.split(' ')[0]}…`)}</div>`;
+}
+
+function viewRun() {
+  const today = todayStr();
+  if (!R && runError) return `<div class="empty">⚠️ ${esc(runError)}<br><br><button data-action="run-retry">Tentar de novo</button></div>`;
+  if (!R) { loadRun().then(render); return '<div class="empty">Carregando…</div>'; }
+  if (!R.coach) return myRunView(today);
+  const unread = coachList ? coachList.reduce((t, x) => t + x.unread, 0) : 0;
+  return `
+    <div class="card seg" style="grid-template-columns:1fr 1fr">
+      <button class="${runMode === 'me' ? 'on' : ''}" data-action="run-mode" data-v="me">Minha planilha</button>
+      <button class="${runMode === 'alunos' ? 'on' : ''}" data-action="run-mode" data-v="alunos">Alunos ${unread ? `<span class="unread">${unread}</span>` : ''}</button>
+    </div>
+    ${runMode === 'alunos' ? (coachAthlete ? coachAthleteView(today) : coachListView()) : myRunView(today)}`;
+}
+
+async function loadCoachList() {
+  try { coachList = await runApi(`coach/athletes?today=${todayStr()}`); } catch (e) { coachList = []; toast(`⚠️ ${e.message}`); }
+  render();
+}
+async function openCoachAthlete(id) {
+  try { coachAthlete = await runApi(`coach/athlete/${id}`); render(); window.scrollTo(0, 0); } catch (e) { toast(`⚠️ ${e.message}`); }
+}
+
+function runTodayCard(today) {
+  if (!R?.access?.active) return '';
+  const s = R.sessions.find((x) => x.day === today);
+  if (!s) return '';
+  return `
+    <h2>Corrida de hoje</h2>
+    <div class="card row">
+      <div class="emoji">🏃</div>
+      <div class="grow" data-action="run-open" data-id="${s.id}" style="cursor:pointer">
+        <div class="name">${esc(s.title)}</div>
+        <div class="muted">${typeChip(s.type)} ${s.distanceKm ? `${fmtNum(s.distanceKm)} km` : ''} ${s.pace ? `· ${esc(s.pace)}` : ''}</div>
+      </div>
+      <button class="check ${s.done ? 'on' : ''}" data-action="run-open" data-id="${s.id}" aria-label="Registrar corrida">✓</button>
+    </div>`;
+}
+
+function openRunSession(s) {
+  openModal(`
+    <h3>${esc(s.title)}</h3>
+    <div class="muted" style="margin:-8px 0 10px">${fmtDate(s.day, { weekday: 'long', day: '2-digit', month: 'long' })} · ${typeChip(s.type)}</div>
+    <div class="row" style="gap:16px;margin-bottom:8px">${s.distanceKm ? `<div><b>${fmtNum(s.distanceKm)} km</b></div>` : ''}${s.pace ? `<div>⏱ ${esc(s.pace)}</div>` : ''}</div>
+    <div class="desc">${esc(s.description || '')}</div>
+    ${s.coachNote ? `<div class="note">💬 Treinador: ${esc(s.coachNote)}</div>` : ''}
+    <h2>Como foi</h2>
+    <label class="row" style="margin-bottom:10px;font-size:15px"><input type="checkbox" name="done" ${s.done || !s.feedback ? 'checked' : ''}> Treino feito</label>
+    <div class="row">
+      <label class="field grow">Distância (km)<input name="actualKm" type="number" step="0.01" inputmode="decimal" value="${s.actualKm ?? s.distanceKm ?? ''}"></label>
+      <label class="field grow">Tempo total<input name="actualTime" placeholder="ex. 42:30" value="${esc(s.actualTime || '')}"></label>
+    </div>
+    <label class="field">Esforço (1 = muito leve, 10 = máximo): <b id="rpe-v">${s.rpe || 5}</b>
+      <input name="rpe" type="range" min="1" max="10" value="${s.rpe || 5}" oninput="document.getElementById('rpe-v').textContent=this.value">
+    </label>
+    <label class="field">Comentário<textarea name="feedback" rows="2" placeholder="Sentiu alguma dor? Como estava o clima?">${esc(s.feedback || '')}</textarea></label>
+    <div class="actions"><button value="cancel" formnovalidate>Fechar</button><button class="btn-primary" value="ok">Salvar</button></div>`, {
+    onSubmit(f) {
+      Object.assign(s, { done: f.get('done') === 'on', actualKm: f.get('actualKm'), actualTime: f.get('actualTime').trim(), rpe: Number(f.get('rpe')), feedback: f.get('feedback').trim() });
+      if (s.done) toast('Corrida registrada! 🏃');
+      save(runApi(`sessions/${s.id}`, { method: 'PUT', body: s }));
+    },
+  });
+}
+
+function openCoachSession(s, athleteId) {
+  const isNew = !s;
+  s = s || { day: todayStr(), type: 'leve', title: '', description: '', distanceKm: '', pace: '', coachNote: '' };
+  openModal(`
+    <h3>${isNew ? 'Novo treino' : 'Editar treino'}</h3>
+    ${!isNew && s.done ? `<div class="note">✅ Feito: ${s.actualKm ? `${fmtNum(s.actualKm)} km` : ''} ${s.actualTime ? `em ${esc(s.actualTime)}` : ''} ${s.rpe ? `· esforço ${s.rpe}/10` : ''}${s.feedback ? `\n“${esc(s.feedback)}”` : ''}</div>` : ''}
+    <div class="row">
+      <label class="field grow">Data<input name="day" type="date" value="${s.day}" required></label>
+      <label class="field grow">Tipo<select name="type">${Object.entries(TYPES).map(([k, v]) => `<option value="${k}" ${s.type === k ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
+    </div>
+    <label class="field">Título<input name="title" value="${esc(s.title)}" required placeholder="Ex: Intervalado 6 × 800 m"></label>
+    <div class="row">
+      <label class="field grow">Distância (km)<input name="distanceKm" type="number" step="0.5" value="${s.distanceKm ?? ''}"></label>
+      <label class="field grow">Ritmo-alvo<input name="pace" value="${esc(s.pace || '')}" placeholder="5:30–5:50/km"></label>
+    </div>
+    <label class="field">Descrição<textarea name="description" rows="4">${esc(s.description || '')}</textarea></label>
+    <label class="field">Recado para o aluno<textarea name="coachNote" rows="2">${esc(s.coachNote || '')}</textarea></label>
+    <div class="actions">
+      ${isNew ? '' : '<button type="button" class="btn-danger" data-m="delete">Excluir</button>'}
+      <button value="cancel" formnovalidate>Cancelar</button><button class="btn-primary" value="ok">Salvar</button>
+    </div>`, {
+    onSubmit(f) {
+      const data = Object.fromEntries(['day', 'type', 'title', 'distanceKm', 'pace', 'description', 'coachNote'].map((k) => [k, f.get(k)]));
+      const req = isNew
+        ? runApi('coach/sessions', { method: 'POST', body: { ...data, athleteId, week: s.week || 0 } })
+        : runApi(`coach/sessions/${s.id}`, { method: 'PUT', body: data });
+      req.then(() => openCoachAthlete(athleteId)).catch((e) => toast(`⚠️ ${e.message}`));
+    },
+    onClick(ev) {
+      if (ev.target.closest('[data-m=delete]') && confirm('Excluir este treino?')) {
+        $modal.close();
+        runApi(`coach/sessions/${s.id}`, { method: 'DELETE' }).then(() => openCoachAthlete(athleteId)).catch((e) => toast(`⚠️ ${e.message}`));
+      }
+    },
+  });
+}
+
+function openManage() {
+  const a = R.access;
+  openModal(`
+    <h3>Sua assinatura</h3>
+    <p>Plano <b>${R.plans[a.plan].name}</b> · ${money(R.plans[a.plan].price)}/mês</p>
+    <p class="muted">${a.status === 'trial' ? `Teste grátis: faltam ${a.trialDaysLeft} dias.` : 'Cobrança mensal pelo Mercado Pago.'}</p>
+    <div class="actions" style="justify-content:stretch;flex-direction:column">
+      ${a.plan === 'basico' ? `<button type="button" class="btn-blue" data-m="sub" data-plan="premium">Mudar para Premium (${money(R.plans.premium.price)})</button>` : `<button type="button" data-m="sub" data-plan="basico">Mudar para Básico (${money(R.plans.basico.price)})</button>`}
+      ${a.status === 'trial' && !a.hasPayment ? `<button type="button" class="btn-primary" data-m="sub" data-plan="${a.plan}">Assinar agora</button>` : ''}
+      <button type="button" class="btn-danger" data-m="cancel">Cancelar assinatura</button>
+      <button value="cancel">Fechar</button>
+    </div>`, {
+    onClick(ev) {
+      const t = ev.target.closest('[data-m]');
+      if (!t) return;
+      if (t.dataset.m === 'sub') { $modal.close(); subscribe(t.dataset.plan); }
+      if (t.dataset.m === 'cancel' && confirm('Cancelar a assinatura? Você perde o acesso à planilha.')) {
+        $modal.close();
+        runApi('cancel', { method: 'POST' }).then(loadRun).then(render).then(() => toast('Assinatura cancelada')).catch((e) => toast(`⚠️ ${e.message}`));
+      }
+    },
+  });
+}
+
+async function subscribe(plan) {
+  if (!R.paymentsReady) return toast('O pagamento ainda está sendo configurado. Fale com o treinador.', 3000);
+  try {
+    toast('Abrindo o Mercado Pago…');
+    const { url } = await runApi('subscribe', { method: 'POST', body: { plan } });
+    location.href = url;
+  } catch (e) { toast(`⚠️ ${e.message}`); }
+}
+
+function chatText() { const el = $('#chat-input'); const v = el?.value.trim(); return v || null; }
+
+async function handleRunAction(d, t) {
+  switch (d.action) {
+    case 'run-retry': runError = null; return render();
+    case 'run-mode': runMode = d.v; store.set('run-mode', runMode); coachAthlete = null; if (runMode === 'alunos') coachList = null; return render();
+    case 'run-trial':
+      try { await runApi('trial', { method: 'POST', body: { plan: d.plan } }); await loadRun(); render(); toast(`🎁 ${R.trialDays} dias grátis liberados!`); } catch (e) { toast(`⚠️ ${e.message}`); }
+      return;
+    case 'run-subscribe': return subscribe(d.plan);
+    case 'run-refresh': await runApi('refresh', { method: 'POST' }).catch(() => {}); await loadRun(); return render();
+    case 'run-manage': return openManage();
+    case 'run-generate': {
+      const f = new FormData($('#run-q'));
+      const data = readQuestionnaire(f);
+      if (data.weekdays.length < 2) return toast('Escolha pelo menos 2 dias');
+      try { t.disabled = true; t.textContent = 'Gerando…'; await runApi('profile', { method: 'POST', body: data }); await loadRun(); render(); toast('Planilha pronta! 🎉'); } catch (e) { toast(`⚠️ ${e.message}`); t.disabled = false; }
+      return;
+    }
+    case 'run-redo':
+      return openQuestionnaire(R.profile, (data) => runApi('profile', { method: 'POST', body: data }).then(loadRun).then(render).then(() => toast('Planilha atualizada!')).catch((e) => toast(`⚠️ ${e.message}`)));
+    case 'run-open': return openRunSession(R.sessions.find((s) => s.id === d.id));
+    case 'run-send': {
+      const text = chatText(); if (!text) return;
+      try { await runApi('messages', { method: 'POST', body: { body: text } }); await loadRun(); render(); $('#chat')?.scrollTo(0, 1e6); } catch (e) { toast(`⚠️ ${e.message}`); }
+      return;
+    }
+    case 'coach-open': return openCoachAthlete(d.id);
+    case 'coach-back': coachAthlete = null; coachList = null; return render();
+    case 'coach-session': return openCoachSession(coachAthlete.sessions.find((s) => s.id === d.id), coachAthlete.user.id);
+    case 'coach-add': return openCoachSession(null, coachAthlete.user.id);
+    case 'coach-redo':
+      return openQuestionnaire(coachAthlete.profile || {}, (data) => runApi(`coach/regenerate/${coachAthlete.user.id}`, { method: 'POST', body: data })
+        .then(() => openCoachAthlete(coachAthlete.user.id)).then(() => toast('Planilha gerada')).catch((e) => toast(`⚠️ ${e.message}`)), `Planilha de ${coachAthlete.user.name}`);
+    case 'coach-access': {
+      const body = d.status ? { status: d.status, plan: coachAthlete.access.plan } : { status: 'active', plan: d.plan };
+      if (!confirm(d.status ? 'Bloquear o acesso deste aluno?' : `Liberar o plano ${R.plans[d.plan].name} para este aluno?`)) return;
+      try { await runApi(`coach/access/${coachAthlete.user.id}`, { method: 'PUT', body }); await openCoachAthlete(coachAthlete.user.id); toast('Acesso atualizado'); } catch (e) { toast(`⚠️ ${e.message}`); }
+      return;
+    }
+    case 'coach-send': {
+      const text = chatText(); if (!text) return;
+      try { await runApi(`coach/messages/${coachAthlete.user.id}`, { method: 'POST', body: { body: text } }); await openCoachAthlete(coachAthlete.user.id); $('#chat')?.scrollTo(0, 1e6); } catch (e) { toast(`⚠️ ${e.message}`); }
+      return;
+    }
+    default:
+  }
+}
+
 /* ================= Eventos ================= */
 
 document.querySelector('.tabs').addEventListener('click', (ev) => {
@@ -908,6 +1316,7 @@ $view.addEventListener('click', (ev) => {
   const c = d.id ? byId(S.challenges, d.id) : null;
   const w = d.w ? byId(S.workouts, d.w) : null;
 
+  if (d.action.startsWith('run-') || d.action.startsWith('coach-')) return handleRunAction(d, t);
   switch (d.action) {
     case 'toggle': {
       const e = myChecks(c)[d.day];
@@ -968,6 +1377,7 @@ $view.addEventListener('click', (ev) => {
 // Ajuste de reps/carga de uma série. Séries seguintes ainda não feitas recebem o mesmo valor.
 $view.addEventListener('change', (ev) => {
   const t = ev.target;
+  if (t.name === 'wd') { t.parentElement.classList.toggle('on', t.checked); return; }
   if (t.dataset.action === 'reminder-hour') {
     const hour = t.value === '' ? null : Number(t.value);
     setReminder(hour).then(() => toast(hour === null ? 'Lembrete desligado' : `Lembrete às ${String(hour).padStart(2, '0')}:00`)).catch((e) => toast(`⚠️ ${e.message}`));
@@ -1044,6 +1454,13 @@ async function start() {
   }
 
   try { await reload(); } catch (e) { return showLogin(e.message); }
+
+  if (params.get('assinatura')) {
+    history.replaceState(null, '', location.pathname);
+    await api('run/refresh', { method: 'POST', body: { today: todayStr() } }).catch(() => {});
+    await loadRun(); tab = 'corrida'; render();
+    toast(R?.access?.status === 'active' ? 'Assinatura confirmada! 🎉' : 'Recebemos seu pedido. A confirmação pode levar alguns minutos.', 3500);
+  }
 
   const invite = store.get('pending-invite');
   if (invite) { store.del('pending-invite'); openJoin(invite); } else offerLocalImport();
