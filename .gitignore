@@ -1,3 +1,7 @@
 node_modules/
 dist/
 .netlify/
+mobile/ios/App/App/public/
+mobile/ios/App/App/capacitor.config.json
+mobile/ios/App/App/config.xml
+mobile/ios/DerivedData/

@@ -1,5 +1,5 @@
 import type { Config, Context } from '@netlify/functions';
-import { getUser } from '@netlify/identity';
+import { getUser, admin } from '@netlify/identity';
 import { getDatabase } from '@netlify/database';
 import { getStore } from '@netlify/blobs';
 import { sendPush } from '../lib/push.mts';
@@ -167,6 +167,37 @@ export default async (req: Request, context: Context) => {
 
     // Planilha de corrida (assinatura)
     if (res === 'run') return await handleRun(req, url, parts, me, body);
+
+    // Excluir a conta e todos os dados (exigência das lojas)
+    if (res === 'me' && method === 'DELETE') {
+      if (body?.confirm !== 'EXCLUIR' && url.searchParams.get('confirm') !== 'EXCLUIR') return err('Confirmação necessária');
+      const email = String(me.email || '').toLowerCase();
+      // fotos do diário
+      const photos = await sql`SELECT photo_key FROM checkins WHERE user_id = ${me.id} AND photo_key IS NOT NULL`;
+      for (const p of photos) await getStore('photos').delete(p.photo_key).catch(() => {});
+      // desafios criados pela pessoa: passam para outro participante; sem ninguém, são apagados
+      const owned = await sql`SELECT id FROM challenges WHERE owner_id = ${me.id}`;
+      for (const c of owned) {
+        const [next] = await sql`SELECT user_id FROM challenge_members WHERE challenge_id = ${c.id} AND user_id <> ${me.id} ORDER BY joined_at LIMIT 1`;
+        if (next) await sql`UPDATE challenges SET owner_id = ${next.user_id} WHERE id = ${c.id}`;
+        else await sql`DELETE FROM challenges WHERE id = ${c.id}`;
+      }
+      await sql`DELETE FROM checkins WHERE user_id = ${me.id}`;
+      await sql`DELETE FROM challenge_members WHERE user_id = ${me.id}`;
+      await sql`DELETE FROM workout_logs WHERE user_id = ${me.id}`;
+      await sql`DELETE FROM workouts WHERE user_id = ${me.id}`;
+      await sql`DELETE FROM push_subscriptions WHERE user_id = ${me.id}`;
+      await sql`DELETE FROM run_messages WHERE athlete_id = ${me.id} OR author_id = ${me.id}`;
+      await sql`DELETE FROM run_sessions WHERE user_id = ${me.id}`;
+      await sql`DELETE FROM run_profiles WHERE user_id = ${me.id}`;
+      await sql`DELETE FROM subscriptions WHERE user_id = ${me.id}`;
+      await sql`DELETE FROM coaches WHERE email = ${email}`;
+      await sql`UPDATE users SET coach_email = NULL WHERE lower(coach_email) = ${email}`;
+      await sql`DELETE FROM users WHERE id = ${me.id}`;
+      // conta de login (Netlify Identity)
+      try { await admin.deleteUser(me.id); } catch (e) { console.error('identity delete', e); }
+      return json({ ok: true });
+    }
 
     // Preferências (lembrete)
     if (res === 'me' && method === 'PUT') {

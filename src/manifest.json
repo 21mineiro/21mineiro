@@ -1,16 +1,30 @@
 {
+  "id": "/",
   "name": "Desafios & Treinos",
   "short_name": "Desafios",
-  "description": "Desafios com amigos, treinos do dia e planilha de corrida.",
-  "start_url": "./",
+  "description": "Desafios com amigos, treino do dia, cardio e evolução. Seu treinador monta o treino e acompanha você.",
+  "lang": "pt-BR",
+  "dir": "ltr",
+  "start_url": "/",
+  "scope": "/",
   "display": "standalone",
+  "orientation": "portrait",
   "background_color": "#0a0a1f",
   "theme_color": "#0a0a1f",
-  "lang": "pt-BR",
+  "categories": ["health", "fitness", "lifestyle", "sports"],
   "icons": [
-    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
-    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" },
-    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
-    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml" }
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml" }
+  ],
+  "screenshots": [
+    { "src": "/screens/1-hoje.png", "sizes": "1170x2532", "type": "image/png", "form_factor": "narrow", "label": "Seu dia: desafios e treino" },
+    { "src": "/screens/2-treino.png", "sizes": "1170x2532", "type": "image/png", "form_factor": "narrow", "label": "Treino com séries, cargas e descanso" },
+    { "src": "/screens/4-perfil.png", "sizes": "1170x2532", "type": "image/png", "form_factor": "narrow", "label": "Sua evolução e conquistas" }
+  ],
+  "shortcuts": [
+    { "name": "Treino de hoje", "url": "/?aba=hoje", "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Desafios", "url": "/?aba=desafios", "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }] }
   ]
 }

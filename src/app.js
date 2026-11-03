@@ -1,4 +1,8 @@
-import { getUser, getSettings, handleAuthCallback, oauthLogin, logout, refreshSession } from '@netlify/identity';
+import { getUser, handleAuthCallback, oauthLogin, logout, refreshSession, login, signup, requestPasswordRecovery, updateUser } from '@netlify/identity';
+
+// App nativo (lojas): no iPhone o login é só por e-mail e senha
+const NATIVE = !!window.Capacitor?.isNativePlatform?.();
+const NATIVE_IOS = NATIVE && window.Capacitor.getPlatform?.() === 'ios';
 import { ring, sparkline, columns, lineChart, heatmap, vizTable, initTooltips, haptic, celebrate, startRest, stopRest, restDefault, setRestDefault, levelFor, greeting, quoteOfDay } from './ui.js';
 
 /* ================= Utilidades ================= */
@@ -84,6 +88,9 @@ let S = null;           // dados vindos do servidor
 const RUN_ENABLED = false;
 let tab = store.get('tab', 'hoje');
 if (!RUN_ENABLED && tab === 'corrida') tab = 'hoje';
+// Atalhos do ícone do app (?aba=hoje)
+const abaParam = new URLSearchParams(location.search).get('aba');
+if (['hoje', 'desafios', 'treinos', 'perfil'].includes(abaParam)) tab = abaParam;
 
 async function reload() {
   const [state] = await Promise.all([api('state'), RUN_ENABLED ? loadRun() : null]);
@@ -450,7 +457,7 @@ function viewToday() {
   const chosen = S.workouts.filter((w) => findLog(today, w.id));
   let workoutPart;
   if (!S.workouts.length) {
-    workoutPart = `<div class="card empty"><div class="big">🏋️</div>Você ainda não escolheu seu treino.<br><br><button class="btn-primary" data-action="go-workouts">Escolher meu treino</button></div>`;
+    workoutPart = `<div class="card empty"><div class="big">🧑‍🏫</div>Seu treinador ainda não montou o seu treino.<br><br><button data-action="go-workouts">Ou crie o seu</button></div>`;
   } else if (!chosen.length) {
     workoutPart = pickTodayCard(today);
   } else {
@@ -650,69 +657,17 @@ function currentProgram() {
 
 const fmtEx = (e) => (e.unit === 'seg' ? `${e.sets}x${e.reps} seg` : `${e.sets}x${e.reps}`);
 
-function programCard(key, chosen) {
-  const p = PROGRAMS[key];
-  return `
-    <div class="card program ${chosen ? 'chosen' : ''}">
-      <div class="row">
-        <div class="wk-ico" aria-hidden="true">${p.icon}</div>
-        <div class="grow"><div class="name">${p.name}</div><div class="muted">${p.days}</div></div>
-      </div>
-      <p class="muted" style="margin-top:10px">${p.desc}</p>
-      <details class="prog-list">
-        <summary>Ver os treinos</summary>
-        ${p.workouts.map((w) => `<div class="prog-w"><b>${esc(w.name)}</b><span class="muted">${WEEKDAYS[w.weekdays[0]]}</span></div>
-          <div class="muted prog-ex">${w.exercises.map((e) => `${esc(e.name)} ${fmtEx(e)}`).join(' · ')}</div>`).join('')}
-      </details>
-      ${chosen ? '<span class="chip ok" style="margin-top:12px;display:inline-block">✓ Seu treino atual</span>'
-        : `<button class="btn-primary btn-block" style="margin-top:12px" data-action="pick-program" data-v="${key}">Escolher este</button>`}
-    </div>`;
-}
-
 function programChooser() {
-  const cur = currentProgram();
-  const custom = !cur && S.workouts.length > 0;
   return `
-    <div class="card hero-pick"><div class="big">💪</div><div class="name" style="font-size:19px">Escolha seu treino</div>
-      <div class="muted">Pegue um programa pronto ou monte o seu. Dá para trocar depois.</div></div>
-    ${programCard('completo', cur === 'completo')}
-    ${programCard('corrida', cur === 'corrida')}
-    <div class="card program ${custom ? 'chosen' : ''}">
+    <div class="card hero-pick"><div class="big">🧑‍🏫</div><div class="name" style="font-size:19px">Seu treino vem do treinador</div>
+      <div class="muted">Assim que seu treinador montar o seu treino, ele aparece aqui e na tela Hoje.</div></div>
+    <div class="card program">
       <div class="row">
         <div class="wk-ico" aria-hidden="true">✍️</div>
-        <div class="grow"><div class="name">Criar meu treino</div><div class="muted">Do seu jeito, com seus exercícios</div></div>
+        <div class="grow"><div class="name">Quer treinar por conta própria?</div><div class="muted">Crie o seu treino, com seus exercícios</div></div>
       </div>
-      ${custom ? '<span class="chip ok" style="margin-top:12px;display:inline-block">✓ Seu treino atual</span>'
-        : '<button class="btn-block" style="margin-top:12px" data-action="pick-program" data-v="custom">Criar o meu</button>'}
-    </div>
-    ${S.workouts.length ? '<button class="btn-block" data-action="close-chooser">Voltar</button>' : ''}`;
-}
-
-let showChooser = false;
-
-// Troca o programa: apaga os treinos atuais (o histórico fica) e cria os novos
-async function pickProgram(key) {
-  const cur = currentProgram();
-  const custom = !cur && S.workouts.length > 0;
-  if (key === cur || (key === 'custom' && custom)) { showChooser = false; return render(); }
-  if (S.workouts.length && !confirm('Isso troca os seus treinos atuais. O histórico do que você já fez continua guardado. Trocar?')) return;
-  const old = S.workouts;
-  S.workouts = [];
-  if (key !== 'custom') {
-    const p = PROGRAMS[key];
-    S.workouts = p.workouts.map((w, i) => ({
-      id: `pg-${key}-${w.letter}-${uid().slice(0, 8)}`, name: w.name, weekdays: w.weekdays,
-      exercises: w.exercises.map((e) => ({ id: uid(), ...e })), position: i,
-    }));
-  }
-  showChooser = false; tab = 'treinos'; store.set('tab', tab); enterAnim = true;
-  render();
-  try {
-    for (const w of old) await api(`workouts/${w.id}`, { method: 'DELETE' });
-    for (const w of S.workouts) await api(`workouts/${w.id}`, { method: 'PUT', body: w });
-    if (key === 'custom') openWorkoutForm();
-    else { toast(`${PROGRAMS[key].icon} ${PROGRAMS[key].name} escolhido!`); celebrate('small'); }
-  } catch (e) { toast(`⚠️ ${e.message}`); await reload(); }
+      <button class="btn-block" style="margin-top:12px" data-action="new-workout">Criar meu treino</button>
+    </div>`;
 }
 
 /* ================= Cardio do treino ================= */
@@ -950,13 +905,13 @@ function viewWorkouts() {
   const weekStart = addDays(today, -parseDate(today).getDay());
   const volume = S.logs.filter((l) => l.day >= weekStart).reduce((t, l) => t + l.exercises.reduce((u, e) => u + e.sets.filter((s) => s.done || l.finished).reduce((v, s) => v + (Number(s.reps) || 0) * (Number(s.weight) || 0), 0), 0), 0);
   const lastDone = (w) => finished.filter((l) => l.workoutId === w.id).map((l) => l.day).sort().pop();
-  if (showChooser || !S.workouts.length) return programChooser();
+  if (!S.workouts.length) return programChooser();
   const prog = currentProgram();
   const fromCoach = S.workouts.some((w) => w.id.startsWith('co-'));
   return `
     <div class="card row prog-head">
       <div class="grow"><div class="muted">Seu treino</div><div class="name">${fromCoach ? '🧑‍🏫 Montado pelo seu treinador' : prog ? `${PROGRAMS[prog].icon} ${PROGRAMS[prog].name}` : '✍️ Meu treino'}</div></div>
-      ${fromCoach ? '' : '<button class="btn-small" data-action="open-chooser">Trocar</button>'}
+
     </div>
     ${finished.length ? `<div class="kpis">
       ${tile('Nesta semana', perWeek[perWeek.length - 1].value, { delta: 'treinos concluídos', spark: sparkline(perWeek.map((w) => w.value), 'Treinos por semana, últimas 8 semanas') })}
@@ -964,7 +919,7 @@ function viewWorkouts() {
       ${tile('Volume na semana', `${fmtNum(Math.round(volume))}<small> kg</small>`, { delta: 'séries × reps × carga' })}
       ${tile('Cardio na semana', `${fmtNum(cardioMin(S.logs, weekStart))}<small> min</small>`, { delta: 'junto com os treinos' })}
     </div>` : ''}
-    ${prog || fromCoach ? '' : '<button class="btn-primary btn-block" data-action="new-workout" style="margin-bottom:14px">+ Novo treino</button>'}
+    <button class="btn-primary btn-block" data-action="new-workout" style="margin-bottom:14px">+ Criar meu treino</button>
     ${S.workouts.length ? S.workouts.map((w) => {
       const last = lastDone(w);
       return `
@@ -1022,7 +977,15 @@ function viewProfile() {
   const heatWeeks = weekly(16, (d) => acts.get(d) || 0);
 
   let pushBlock;
-  if (isIOS && !standalone) {
+  if (NATIVE) {
+    // App das lojas: lembrete local, agendado no próprio celular
+    const nh = store.get('native-reminder', null);
+    pushBlock = `
+      <label class="field">Horário do lembrete
+        <select data-action="native-reminder"><option value="">Desligado</option>${Array.from({ length: 24 }, (_, h) => `<option value="${h}" ${nh === h ? 'selected' : ''}>${String(h).padStart(2, '0')}:00</option>`).join('')}</select>
+      </label>
+      <div class="muted">Todo dia nesse horário o app lembra você de marcar os desafios e treinar.</div>`;
+  } else if (isIOS && !standalone) {
     pushBlock = `<div class="muted">No iPhone, os lembretes só funcionam com o app na tela inicial: toque em <b>Compartilhar</b> <span aria-hidden="true">⬆️</span> → <b>Adicionar à Tela de Início</b> e abra o app por lá.</div>`;
   } else if (!pushOk) {
     pushBlock = '<div class="muted">Este navegador não aceita notificações.</div>';
@@ -1104,6 +1067,16 @@ function viewProfile() {
         <div class="muted" style="margin-bottom:6px">${fmtDate(l.day, { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' })}${l.cardio?.done ? ` · 🫀 ${l.cardio.minutes} min de cardio` : ''}</div>
         ${l.exercises.map((e) => `<div class="muted">${e.sets.every((s) => s.done) ? '✅' : '⬜'} ${esc(e.name)} — ${e.sets.map((s) => (e.unit === 'seg' ? `${s.reps}s` : `${s.reps}×${fmtNum(s.weight)}`)).join(' · ')}${e.unit === 'seg' ? '' : ' kg'}</div>`).join('')}
       </div>`).join('') : '<div class="card empty">Nenhum treino registrado ainda.</div>'}
+
+    <h2>Conta</h2>
+    <div class="card">
+      <div class="row" style="flex-wrap:wrap">
+        <a class="btn btn-small" href="/privacidade.html">🔒 Privacidade</a>
+        <a class="btn btn-small" href="/suporte.html">💬 Suporte</a>
+        <button class="btn-small" data-action="logout">Sair</button>
+      </div>
+      <button class="btn-danger btn-block" style="margin-top:10px" data-action="delete-account">Excluir minha conta</button>
+    </div>
   `;
 }
 
@@ -1446,6 +1419,23 @@ async function enablePush() {
     toast('🔔 Lembretes ativados!');
     render();
   } catch (e) { toast(`⚠️ ${e.message}`); }
+}
+
+// Lembrete diário no app nativo (notificação local, sem servidor)
+async function nativeReminder(hour) {
+  const ln = window.Capacitor?.Plugins?.LocalNotifications;
+  if (!ln) return false;
+  try {
+    await ln.cancel({ notifications: [{ id: 1 }] }).catch(() => {});
+    if (hour === null) return true;
+    const perm = await ln.requestPermissions();
+    if (perm.display !== 'granted') { toast('Libere as notificações nos Ajustes do iPhone'); return false; }
+    await ln.schedule({ notifications: [{
+      id: 1, title: 'Bora manter a sequência! 🔥', body: 'Hora de marcar seus desafios e fazer o treino do dia.',
+      schedule: { on: { hour, minute: 0 }, repeats: true, allowWhileIdle: true },
+    }] });
+    return true;
+  } catch (e) { toast(`⚠️ ${e.message}`); return false; }
 }
 
 function setReminder(hour) {
@@ -2156,7 +2146,6 @@ $view.addEventListener('click', (ev) => {
       return save(saveLog(log, true));
     }
     case 'chart': return openChart(d.name);
-    case 'pick-program': return pickProgram(d.v);
     case 'cardio-done': {
       const log = getOrCreateLog(d.day, w);
       const c = log.cardio || { minutes: 0, type: '' };
@@ -2186,8 +2175,6 @@ $view.addEventListener('click', (ev) => {
       stopRest();
       return save(api(`logs?day=${d.day}&workoutId=${encodeURIComponent(d.w)}`, { method: 'DELETE' }));
     }
-    case 'open-chooser': showChooser = true; enterAnim = true; render(); return window.scrollTo(0, 0);
-    case 'close-chooser': showChooser = false; return render();
     case 'go-workouts': tab = 'treinos'; store.set('tab', tab); enterAnim = true; render(); return window.scrollTo(0, 0);
     case 'rest-cycle': {
       const opts = [60, 90, 120, 180];
@@ -2208,6 +2195,13 @@ $view.addEventListener('click', (ev) => {
     case 'enable-push': return enablePush();
     case 'test-push': return api('push/test', { method: 'POST' }).then((r) => toast(r.sent ? 'Notificação enviada!' : 'Nenhum aparelho inscrito')).catch((e) => toast(`⚠️ ${e.message}`));
     case 'photo': return window.open(t.src, '_blank');
+    case 'delete-account': {
+      const ok = prompt('Isso apaga sua conta e TODOS os seus dados (desafios, treinos, fotos e histórico). Não dá para desfazer.\n\nPara confirmar, digite EXCLUIR:');
+      if (ok?.trim().toUpperCase() !== 'EXCLUIR') return;
+      return api('me?confirm=EXCLUIR', { method: 'DELETE' })
+        .then(() => { toast('Conta excluída. Até logo 👋', 3000); store.del('dev-user'); return logout().catch(() => {}); })
+        .finally(() => setTimeout(() => location.reload(), 1500));
+    }
     case 'logout':
       if (!confirm('Sair da conta?')) return;
       if (DEV_USER) store.del('dev-user');
@@ -2223,6 +2217,11 @@ $view.addEventListener('change', (ev) => {
   if (t.dataset.action === 'reminder-hour') {
     const hour = t.value === '' ? null : Number(t.value);
     setReminder(hour).then(() => toast(hour === null ? 'Lembrete desligado' : `Lembrete às ${String(hour).padStart(2, '0')}:00`)).catch((e) => toast(`⚠️ ${e.message}`));
+    return;
+  }
+  if (t.dataset.action === 'native-reminder') {
+    const hour = t.value === '' ? null : Number(t.value);
+    nativeReminder(hour).then((ok) => { if (ok) { store.set('native-reminder', hour); toast(hour === null ? 'Lembrete desligado' : `🔔 Lembrete todo dia às ${String(hour).padStart(2, '0')}:00`); } else render(); });
     return;
   }
   if (t.dataset.action === 'tr-assign') {
@@ -2282,10 +2281,22 @@ function showLogin(message = '') {
       <h2 class="grad-text">Desafios & Treinos</h2>
       <p class="tag">Desafios com os amigos e treino do dia. Tudo num app só, com o astral lá em cima.</p>
       ${invite ? '<p class="chip on" style="display:inline-block;margin-top:14px">Você recebeu um convite! Entre para participar.</p>' : ''}
-      <button class="btn-google" id="google-login">
+      ${NATIVE_IOS ? '' : `<button class="btn-google" id="google-login">
         <svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.4-.4-3.5z"/><path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/><path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-7.9l-6.5 5C9.5 39.6 16.2 44 24 44z"/><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.2 5.2C37 39.2 44 34 44 24c0-1.3-.1-2.4-.4-3.5z"/></svg>
         Entrar com Google
       </button>
+      <div class="or"><span>ou com e-mail</span></div>`}
+      <form class="card login-form" id="email-form" novalidate>
+        <div class="seg mini" style="margin-bottom:12px">
+          <button type="button" class="${loginMode === 'entrar' ? 'on' : ''}" data-lm="entrar">Entrar</button>
+          <button type="button" class="${loginMode === 'criar' ? 'on' : ''}" data-lm="criar">Criar conta</button>
+        </div>
+        ${loginMode === 'criar' ? '<label class="field">Seu nome<input name="name" autocomplete="name" required></label>' : ''}
+        <label class="field">E-mail<input name="email" type="email" autocomplete="email" inputmode="email" required></label>
+        <label class="field">Senha<input name="password" type="password" autocomplete="${loginMode === 'criar' ? 'new-password' : 'current-password'}" minlength="6" required></label>
+        <button class="btn-primary btn-block" type="submit">${loginMode === 'criar' ? 'Criar minha conta' : 'Entrar'}</button>
+        ${loginMode === 'entrar' ? '<button type="button" class="btn-link" data-lm="esqueci" style="margin-top:8px">Esqueci minha senha</button>' : ''}
+      </form>
       ${message ? `<p class="muted" style="margin-top:12px">⚠️ ${esc(message)}</p>` : ''}
       <div class="feat">
         <div><span>🎯</span>Desafios de 21 dias, metas e ranking com amigos</div>
@@ -2294,8 +2305,66 @@ function showLogin(message = '') {
         <div><span>📈</span>Evolução de carga e painéis da sua semana</div>
       </div>
     </div>`;
-  $('#google-login').onclick = () => {
-    try { oauthLogin('google'); } catch (e) { showLogin(e.message); }
+  const g = $('#google-login');
+  if (g) g.onclick = () => { try { oauthLogin('google'); } catch (e) { showLogin(e.message); } };
+  const form = $('#email-form');
+  form.onclick = async (ev) => {
+    const b = ev.target.closest('[data-lm]');
+    if (!b) return;
+    if (b.dataset.lm === 'esqueci') {
+      const email = form.email.value.trim() || prompt('Seu e-mail:');
+      if (!email) return;
+      try { await requestPasswordRecovery(email); toast('📧 Enviamos um link para criar uma nova senha', 3500); } catch (e) { toast(`⚠️ ${authMsg(e)}`); }
+      return;
+    }
+    loginMode = b.dataset.lm; showLogin();
+  };
+  form.onsubmit = async (ev) => {
+    ev.preventDefault();
+    const email = form.email.value.trim(), password = form.password.value;
+    if (!email || password.length < 6) return toast('Preencha o e-mail e uma senha com pelo menos 6 caracteres');
+    const btn = form.querySelector('[type=submit]'); btn.disabled = true;
+    try {
+      if (loginMode === 'criar') {
+        const name = form.name.value.trim();
+        await signup(email, password, { full_name: name || email.split('@')[0] });
+        const user = await getUser();
+        if (!user) { btn.disabled = false; return showLogin('📧 Conta criada! Confirme pelo link que enviamos para o seu e-mail e depois entre aqui.'); }
+      } else {
+        await login(email, password);
+      }
+      start();
+    } catch (e) { btn.disabled = false; toast(`⚠️ ${authMsg(e)}`, 3500); }
+  };
+}
+
+let loginMode = 'entrar';
+// Mensagens de erro do login em português
+function authMsg(e) {
+  const m = String(e?.message || e || '').toLowerCase();
+  if (m.includes('invalid') && (m.includes('password') || m.includes('credentials') || m.includes('grant'))) return 'E-mail ou senha incorretos';
+  if (m.includes('confirm')) return 'Confirme seu e-mail pelo link que enviamos antes de entrar';
+  if (m.includes('already') || m.includes('registered')) return 'Esse e-mail já tem conta. Use "Entrar" ou "Esqueci minha senha"';
+  if (m.includes('password') && m.includes('short')) return 'A senha precisa ter pelo menos 6 caracteres';
+  return e?.message || 'Não foi possível entrar';
+}
+
+// Depois do link "esqueci minha senha": pede a nova senha
+function showNewPassword() {
+  document.body.classList.add('logged-out');
+  $view.innerHTML = `
+    <div class="login">
+      <h2 class="grad-text">Nova senha</h2>
+      <form class="card login-form" id="pw-form">
+        <label class="field">Crie uma nova senha<input name="password" type="password" autocomplete="new-password" minlength="6" required></label>
+        <button class="btn-primary btn-block" type="submit">Salvar e entrar</button>
+      </form>
+    </div>`;
+  $('#pw-form').onsubmit = async (ev) => {
+    ev.preventDefault();
+    const pw = ev.target.password.value;
+    if (pw.length < 6) return toast('A senha precisa ter pelo menos 6 caracteres');
+    try { await updateUser({ password: pw }); toast('Senha atualizada ✅'); start(); } catch (e) { toast(`⚠️ ${authMsg(e)}`); }
   };
 }
 
@@ -2322,15 +2391,12 @@ async function start() {
   }
 
   if (!DEV_USER) {
-    try { await handleAuthCallback(); } catch (e) { return showLogin(e.message); }
+    let cb = null;
+    try { cb = await handleAuthCallback(); } catch (e) { return showLogin(authMsg(e)); }
+    if (cb?.type === 'recovery') return showNewPassword();
     const user = await getUser();
-    if (!user) {
-      try {
-        const settings = await getSettings();
-        if (!settings.providers?.google) return showLogin('O login com Google ainda não foi ativado no painel da Netlify.');
-      } catch { /* segue para a tela de login */ }
-      return showLogin();
-    }
+    if (!user) return showLogin();
+    if (cb?.type === 'confirmation') toast('E-mail confirmado! Bem-vindo(a) 🎉', 3000);
   }
 
   try { await reload(); } catch (e) { return showLogin(e.message); }

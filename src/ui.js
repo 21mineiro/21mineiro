@@ -230,6 +230,9 @@ export function initTooltips() {
 
 /* ---------- Vibração e confete ---------- */
 export function haptic(pattern = 12) {
+  // No app nativo (lojas) usa a vibração do celular; no navegador, a do Android
+  const native = window.Capacitor?.Plugins?.Haptics;
+  if (native) { native.impact({ style: Array.isArray(pattern) ? 'HEAVY' : 'MEDIUM' }).catch(() => {}); return; }
   try { navigator.vibrate?.(pattern); } catch { /* sem suporte */ }
 }
 

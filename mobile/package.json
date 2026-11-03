@@ -1,0 +1,17 @@
+{
+  "name": "desafios-treinos-mobile",
+  "private": true,
+  "description": "App nativo (iPhone) que abre o Desafios & Treinos publicado na Netlify",
+  "scripts": {
+    "sync": "cap sync ios"
+  },
+  "dependencies": {
+    "@capacitor/core": "8.6.0",
+    "@capacitor/ios": "8.6.0",
+    "@capacitor/haptics": "8.0.2",
+    "@capacitor/local-notifications": "8.3.1"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "8.6.0"
+  }
+}

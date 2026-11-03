@@ -1,0 +1,17 @@
+{
+  "appId": "app.desafiostreinos",
+  "appName": "Desafios & Treinos",
+  "webDir": "www",
+  "server": {
+    "url": "https://desafios-treinos.netlify.app",
+    "cleartext": false
+  },
+  "ios": {
+    "contentInset": "never",
+    "backgroundColor": "#0a0a1f",
+    "limitsNavigationsToAppBoundDomains": false
+  },
+  "plugins": {
+    "LocalNotifications": { "iconColor": "#8b5cf6" }
+  }
+}

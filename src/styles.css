@@ -775,3 +775,11 @@ body { padding-bottom: calc(112px + env(safe-area-inset-bottom)); }
 .pick-row input { width: 20px; height: 20px; }
 .pick-row b { display: block; font-size: 15px; }
 .pick-row small { color: var(--muted); }
+
+/* Login por e-mail */
+.login-form { max-width: 380px; margin: 18px auto 0; text-align: left; }
+.login-form .seg.mini { width: 100%; }
+.login-form .seg.mini button { flex: 1; }
+.or { display: flex; align-items: center; gap: 10px; max-width: 380px; margin: 18px auto 0; color: var(--muted); font-size: 13px; }
+.or::before, .or::after { content: ''; flex: 1; height: 1px; background: var(--line); }
+a.btn { text-decoration: none; display: inline-block; }

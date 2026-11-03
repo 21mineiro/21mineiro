@@ -1,0 +1,11 @@
+body{margin:0;background:#0a0a1f;color:#f5f3ff;font-family:'Space Grotesk',system-ui,-apple-system,'Segoe UI',sans-serif;line-height:1.6}
+@font-face{font-family:'Space Grotesk';src:url('/fonts/space-grotesk.woff2') format('woff2');font-weight:300 700;font-display:swap}
+main{max-width:720px;margin:0 auto;padding:32px 20px 60px}
+h1{font-size:30px;margin:12px 0 4px;background:linear-gradient(100deg,#c4b5fd,#f0abfc 50%,#fda4af);-webkit-background-clip:text;background-clip:text;color:transparent}
+h2{font-size:18px;margin:28px 0 6px}
+p,li{color:#d6d3f0}
+a{color:#67e8f9}
+.top{display:flex;align-items:center;gap:12px}
+.top img{width:52px;height:52px;border-radius:14px}
+.muted{color:#a9a6cc;font-size:14px}
+.card{background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);border-radius:18px;padding:16px 18px;margin-top:14px}

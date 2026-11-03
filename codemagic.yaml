@@ -1,0 +1,38 @@
+# Build do app iOS na nuvem (sem precisar de Mac) — https://codemagic.io
+# 1) Conecte este repositório no Codemagic
+# 2) Em Teams > Integrations, conecte a App Store Connect API key com o nome "appstore"
+# 3) Rode o workflow "ios-release": ele gera o .ipa e envia para o TestFlight
+workflows:
+  ios-release:
+    name: iOS → TestFlight
+    max_build_duration: 60
+    instance_type: mac_mini_m2
+    integrations:
+      app_store_connect: appstore
+    environment:
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: app.desafiostreinos
+      node: 22
+      xcode: latest
+    scripts:
+      - name: Instalar dependências
+        script: cd mobile && npm ci
+      - name: Sincronizar Capacitor
+        script: cd mobile && npx cap sync ios
+      - name: Assinatura
+        script: xcode-project use-profiles
+      - name: Número do build
+        script: |
+          cd mobile/ios/App
+          agvtool new-version -all $(($(app-store-connect get-latest-testflight-build-number "$APP_STORE_APPLE_ID" 2>/dev/null || echo 0) + 1))
+      - name: Gerar .ipa
+        script: |
+          cd mobile/ios/App
+          xcode-project build-ipa --project App.xcodeproj --scheme App
+    artifacts:
+      - mobile/ios/App/build/ios/ipa/*.ipa
+    publishing:
+      app_store_connect:
+        auth: integration
+        submit_to_testflight: true
