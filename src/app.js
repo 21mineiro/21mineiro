@@ -80,10 +80,13 @@ async function save(promise) {
 /* ================= Estado ================= */
 
 let S = null;           // dados vindos do servidor
+// Aba Corrida desligada por enquanto (o código continua no app para religar depois)
+const RUN_ENABLED = false;
 let tab = store.get('tab', 'hoje');
+if (!RUN_ENABLED && tab === 'corrida') tab = 'hoje';
 
 async function reload() {
-  const [state] = await Promise.all([api('state'), loadRun()]);
+  const [state] = await Promise.all([api('state'), RUN_ENABLED ? loadRun() : null]);
   S = state;
   render();
 }
@@ -1823,7 +1826,7 @@ function showLogin(message = '') {
         </svg>
       </div>
       <h2 class="grad-text">Desafios & Treinos</h2>
-      <p class="tag">Desafios com os amigos, treino do dia e planilha de corrida. Tudo num app só, com o astral lá em cima.</p>
+      <p class="tag">Desafios com os amigos e treino do dia. Tudo num app só, com o astral lá em cima.</p>
       ${invite ? '<p class="chip on" style="display:inline-block;margin-top:14px">Você recebeu um convite! Entre para participar.</p>' : ''}
       <button class="btn-google" id="google-login">
         <svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.4-.4-3.5z"/><path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/><path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-7.9l-6.5 5C9.5 39.6 16.2 44 24 44z"/><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.2 5.2C37 39.2 44 34 44 24c0-1.3-.1-2.4-.4-3.5z"/></svg>
@@ -1833,8 +1836,8 @@ function showLogin(message = '') {
       <div class="feat">
         <div><span>🎯</span>Desafios de 21 dias, metas e ranking com amigos</div>
         <div><span>🏋️</span>Treino do dia com carga por série e timer de descanso</div>
-        <div><span>🏃</span>Planilha de corrida com ritmos e evolução</div>
         <div><span>🌌</span>Energia, níveis e conquistas a cada dia marcado</div>
+        <div><span>📈</span>Evolução de carga e painéis da sua semana</div>
       </div>
     </div>`;
   $('#google-login').onclick = () => {
@@ -1878,7 +1881,7 @@ async function start() {
 
   try { await reload(); } catch (e) { return showLogin(e.message); }
 
-  if (params.get('assinatura')) {
+  if (RUN_ENABLED && params.get('assinatura')) {
     history.replaceState(null, '', location.pathname);
     await api('run/refresh', { method: 'POST', body: { today: todayStr() } }).catch(() => {});
     await loadRun(); tab = 'corrida'; render();
