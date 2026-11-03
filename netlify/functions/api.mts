@@ -48,6 +48,17 @@ async function getState(me: Me) {
     ? (await sql`SELECT name FROM users WHERE lower(email) = ${String(profile.coach_email).toLowerCase()} LIMIT 1`)[0]?.name || profile.coach_email
     : null;
 
+  // Desafios da academia do meu treinador (ainda não terminados): entro sozinho, a não ser que tenha saído
+  const myTeam = profile?.coach_email ? String(profile.coach_email).toLowerCase() : null;
+  if (myTeam) {
+    await sql`
+      INSERT INTO challenge_members (challenge_id, user_id, link_workout)
+      SELECT c.id, ${me.id}, FALSE FROM challenges c
+      WHERE lower(c.team_coach) = ${myTeam} AND c.start_date + c.days > CURRENT_DATE
+        AND NOT EXISTS (SELECT 1 FROM challenge_optouts o WHERE o.challenge_id = c.id AND o.user_id = ${me.id})
+      ON CONFLICT DO NOTHING`;
+  }
+
   const challenges = await sql`
     SELECT c.*, to_char(c.start_date, 'YYYY-MM-DD') AS start, m.link_workout
     FROM challenges c JOIN challenge_members m ON m.challenge_id = c.id AND m.user_id = ${me.id}
@@ -73,7 +84,7 @@ async function getState(me: Me) {
     challenges: challenges.map((c: any) => ({
       id: c.id, ownerId: c.owner_id, name: c.name, emoji: c.emoji, kind: c.kind,
       target: num(c.target), unit: c.unit, days: c.days, start: c.start,
-      inviteCode: c.invite_code, linkWorkout: c.link_workout,
+      inviteCode: c.invite_code, linkWorkout: c.link_workout, team: !!c.team_coach,
       members: members.filter((m: any) => m.challenge_id === c.id).map((m: any) => ({ id: m.id, name: m.name, avatar: m.avatar })),
       checkins: checkins.filter((k: any) => k.challenge_id === c.id).reduce((acc: any, k: any) => {
         (acc[k.user_id] ||= {})[k.day] = { value: Number(k.value), note: k.note || '', photo: k.photo_key || null };
@@ -293,6 +304,31 @@ export default async (req: Request, context: Context) => {
       return json({ id, name, video, tip, reviewed });
     }
 
+    // Ranking da turma: alunos do mesmo treinador (e o treinador), por dias com treino
+    if (res === 'ranking' && method === 'GET') {
+      const today = isDay(url.searchParams.get('today')) ? url.searchParams.get('today') : new Date().toISOString().slice(0, 10);
+      const period = url.searchParams.get('period') === 'month' ? 'month' : 'week';
+      const [p] = await sql`SELECT lower(coach_email) AS ce FROM users WHERE id = ${me.id}`;
+      const role = await roleOf(me.email);
+      const ce = p?.ce || (role.coach ? String(me.email || '').toLowerCase() : null);
+      if (!ce) return json({ group: null, rows: [] });
+      const d = new Date(`${today}T12:00:00Z`);
+      const from = period === 'month'
+        ? `${today.slice(0, 8)}01`
+        : new Date(d.getTime() - d.getUTCDay() * 86400000).toISOString().slice(0, 10);
+      const rows = await sql`
+        SELECT u.id, u.name, u.avatar,
+          (SELECT COUNT(DISTINCT l.day) FROM workout_logs l WHERE l.user_id = u.id AND l.finished AND l.day BETWEEN ${from}::date AND ${today}::date) AS days
+        FROM users u
+        WHERE lower(u.coach_email) = ${ce} OR lower(u.email) = ${ce}
+        ORDER BY days DESC, u.name`;
+      const [coach] = await sql`SELECT name FROM users WHERE lower(email) = ${ce} LIMIT 1`;
+      return json({
+        group: coach?.name || ce, period, from,
+        rows: rows.map((r: any) => ({ id: r.id, name: String(r.name || '').split(' ')[0], avatar: r.avatar, days: Number(r.days), me: r.id === me.id })),
+      });
+    }
+
     // Desafios
     if (res === 'challenges' && method === 'POST') {
       const f = challengeFields(body);
@@ -300,6 +336,12 @@ export default async (req: Request, context: Context) => {
       await sql`INSERT INTO challenges (id, owner_id, name, emoji, kind, target, unit, days, start_date, invite_code)
                 VALUES (${cid}, ${me.id}, ${f.name}, ${f.emoji}, ${f.kind}, ${f.target}, ${f.unit}, ${f.days}, ${f.start}, ${inviteCode()})`;
       await sql`INSERT INTO challenge_members (challenge_id, user_id, link_workout) VALUES (${cid}, ${me.id}, ${!!body.linkWorkout})`;
+      if (body.team && (await roleOf(me.email)).coach) {
+        const ce = String(me.email || '').toLowerCase();
+        await sql`UPDATE challenges SET team_coach = ${ce} WHERE id = ${cid}`;
+        await sql`INSERT INTO challenge_members (challenge_id, user_id, link_workout)
+          SELECT ${cid}, id, FALSE FROM users WHERE lower(coach_email) = ${ce} AND id <> ${me.id} ON CONFLICT DO NOTHING`;
+      }
       return json({ id: cid });
     }
     if (res === 'challenges' && id && method === 'PUT') {
@@ -321,6 +363,7 @@ export default async (req: Request, context: Context) => {
       } else {
         await sql`DELETE FROM checkins WHERE challenge_id = ${id} AND user_id = ${me.id}`;
         await sql`DELETE FROM challenge_members WHERE challenge_id = ${id} AND user_id = ${me.id}`;
+        await sql`INSERT INTO challenge_optouts (challenge_id, user_id) VALUES (${id}, ${me.id}) ON CONFLICT DO NOTHING`;
       }
       return json({ ok: true });
     }

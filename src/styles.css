@@ -867,3 +867,22 @@ a.btn { text-decoration: none; display: inline-block; }
 .ms-photos figcaption { font-size: 12px; color: var(--muted); margin-top: 4px; text-align: center; }
 .ms-empty { display: grid; place-items: center; aspect-ratio: 3 / 4; border: 1.5px dashed var(--line); border-radius: 12px; padding: 12px; text-align: center; font-size: 12px; color: var(--muted); }
 .ms-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 10px; }
+
+/* Ranking da turma */
+.trank .seg.mini { display: inline-grid; grid-template-columns: 1fr 1fr; gap: 2px; padding: 2px; border-radius: 10px; background: var(--surface-2); }
+.trank .seg.mini button { padding: 4px 10px; font-size: 12px; border-radius: 8px; background: transparent; border: 0; color: var(--muted); }
+.trank .seg.mini button.on { background: var(--accent); color: var(--accent-ink); }
+.podium { display: grid; grid-template-columns: 1fr 1fr 1fr; align-items: end; gap: 8px; margin: 6px 0 4px; }
+.pod { position: relative; display: grid; justify-items: center; gap: 4px; padding: 12px 6px 10px; border-radius: 14px; background: var(--surface-2); text-align: center; }
+.pod.p1 { padding-top: 18px; background: var(--accent-soft); }
+.pod b { font-size: 14px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pod .pod-d { font-size: 12px; color: var(--muted); }
+.pod i { position: absolute; top: -10px; font-style: normal; font-size: 20px; }
+.pod.me { outline: 2px solid var(--accent); }
+.rank-list { margin: 10px 0 0; padding: 0 0 0 22px; }
+.rank-list li { padding: 7px 0; border-bottom: 1px solid var(--line); font-size: 14px; }
+.rank-list li span { display: inline-block; }
+.rank-list li { display: list-item; }
+.rank-list li b { float: right; font-variant-numeric: tabular-nums; }
+.rank-list li.me { font-weight: 700; color: var(--accent); }
+.rank-me { margin-top: 8px; font-size: 13px; font-weight: 600; color: var(--accent); }

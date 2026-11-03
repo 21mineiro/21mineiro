@@ -443,7 +443,7 @@ function render() {
 
 const avatar = (m, size = 26) => m.avatar
   ? `<img class="avatar" src="${esc(m.avatar)}" width="${size}" height="${size}" alt="" referrerpolicy="no-referrer">`
-  : `<span class="avatar" style="width:${size}px;height:${size}px">${esc((m.name || '?')[0].toUpperCase())}</span>`;
+  : `<span class="avatar" style="width:${size}px;height:${size}px;font-size:${Math.max(12, Math.round(size * 0.4))}px">${esc((m.name || '?')[0].toUpperCase())}</span>`;
 
 function progressLine(c, s, today) {
   const e = myChecks(c)[today];
@@ -702,6 +702,39 @@ function challengeCard(c, today) {
   </div>`;
 }
 
+// Ranking da turma (alunos do mesmo treinador)
+let teamRank = null, rankPeriod = 'week', rankLoading = false;
+async function loadRanking() {
+  if (rankLoading) return;
+  rankLoading = true;
+  const period = rankPeriod;
+  try { teamRank = { ...(await api(`ranking?today=${todayStr()}&period=${period}`)), period }; } catch { teamRank = { group: null, rows: [], period }; }
+  rankLoading = false;
+  if (tab === 'desafios') render();
+}
+function rankingCard() {
+  if (!S.me.coachEmail && !S.me.coach) return '';
+  if (!teamRank || teamRank.period !== rankPeriod) { loadRanking(); return ''; }
+  if (!teamRank.group || teamRank.rows.length < 2) return '';
+  const rows = teamRank.rows;
+  const top = rows.slice(0, 3), meRow = rows.find((r) => r.me), rest = rows.slice(3, 10);
+  const medal = ['🥇', '🥈', '🥉'];
+  const label = rankPeriod === 'week' ? 'esta semana' : 'este mês';
+  return `
+    <h2>Ranking da turma</h2>
+    <div class="card trank">
+      <div class="row between" style="margin-bottom:10px">
+        <div class="muted">Turma de ${esc(firstName(teamRank.group))} · dias com treino ${label}</div>
+        <div class="seg mini"><button class="${rankPeriod === 'week' ? 'on' : ''}" data-action="rank-period" data-v="week">Semana</button><button class="${rankPeriod === 'month' ? 'on' : ''}" data-action="rank-period" data-v="month">Mês</button></div>
+      </div>
+      <div class="podium">
+        ${[1, 0, 2].filter((i) => top[i]).map((i) => `<div class="pod p${i + 1} ${top[i].me ? 'me' : ''}">${avatar(top[i], i === 0 ? 52 : 42)}<b>${esc(top[i].name)}</b><span class="pod-d">${top[i].days} ${top[i].days === 1 ? 'dia' : 'dias'}</span><i>${medal[i]}</i></div>`).join('')}
+      </div>
+      ${rest.length ? `<ol class="rank-list" start="4">${rest.map((r) => `<li class="${r.me ? 'me' : ''}"><span class="grow">${esc(r.name)}</span><b>${r.days}</b></li>`).join('')}</ol>` : ''}
+      ${meRow && rows.indexOf(meRow) >= 10 ? `<div class="rank-me">Você: ${rows.indexOf(meRow) + 1}º · ${meRow.days} ${meRow.days === 1 ? 'dia' : 'dias'}</div>` : ''}
+    </div>`;
+}
+
 function viewChallenges() {
   const today = todayStr();
   const order = { ativo: 0, futuro: 1, 'concluído': 2, encerrado: 3 };
@@ -721,6 +754,7 @@ function viewChallenges() {
       ${tile('Dias marcados', `${daysSet.size}<small> ${daysSet.size === 1 ? 'dia' : 'dias'}</small>`, { delta: `${perWeek[perWeek.length - 1].value} nesta semana`, spark: sparkline(perWeek.map((w) => w.value), 'Dias marcados por semana, últimas 8 semanas') })}
       ${tile('Atividades marcadas', acts, { delta: 'somando todos os desafios' })}
     </div>` : ''}
+    ${rankingCard()}
     <div class="row" style="margin-bottom:14px">
       <button class="btn-primary grow" data-action="new-challenge">+ Novo desafio</button>
       <button class="grow" data-action="join">🔑 Entrar com código</button>
@@ -1396,6 +1430,10 @@ function openChallengeForm(c) {
       <input type="checkbox" name="linkWorkout" ${c.linkWorkout ? 'checked' : ''}>
       Marcar o dia sozinho quando eu concluir um treino
     </label>
+    ${isNew && S.me.coach ? `<label class="row" style="font-size:14px;margin-bottom:6px">
+      <input type="checkbox" name="team">
+      Desafio da academia: todos os meus alunos entram (inclusive os novos)
+    </label>` : ''}
     <div class="actions">
       ${isNew ? '' : `<button type="button" class="btn-danger" data-m="delete">${owner ? 'Excluir' : 'Sair do desafio'}</button>`}
       <button value="cancel" formnovalidate>Cancelar</button>
@@ -1410,6 +1448,7 @@ function openChallengeForm(c) {
         unit: kind === 'quantity' ? f.get('unit').trim() : null,
       } : { name: c.name, emoji: c.emoji, kind: c.kind, days: c.days, start: c.start, target: c.target, unit: c.unit };
       data.linkWorkout = f.get('linkWorkout') === 'on';
+      if (isNew) data.team = f.get('team') === 'on';
       if (isNew) {
         api('challenges', { method: 'POST', body: data }).then(reload).catch((e) => toast(`⚠️ ${e.message}`));
       } else {
@@ -2497,6 +2536,7 @@ $view.addEventListener('click', (ev) => {
     case 'tr-apply': return coachApplyProgram();
     case 'tr-copy': return coachCopyWorkouts();
     case 'measure-new': return openMeasure();
+    case 'rank-period': rankPeriod = d.v; teamRank = null; return render();
     case 'tr-mode': coachMode = d.v; store.set('coach-mode', coachMode); coachUsers = null; return render();
     case 'tr-pick': return openPickAthletes(d.v);
     case 'tr-invite': return openCoachInvite();
