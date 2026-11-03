@@ -41,6 +41,9 @@ netlify/database/migrations  tabelas do banco
 
 ## Configuração na Netlify
 
+> **Fase de testes:** a cobrança está desligada e todos têm acesso completo à corrida.
+> Para ligar os planos pagos, crie a variável `PAYMENTS_ENABLED=true` e configure o Mercado Pago (abaixo).
+
 1. **Identity**: em *Project configuration → Identity*, clique em *Enable Identity* e, em
    *Registration → External providers*, adicione **Google**.
 2. **Variáveis de ambiente** (para notificações): `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT`

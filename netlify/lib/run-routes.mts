@@ -264,7 +264,11 @@ export async function handleRun(req: Request, url: URL, parts: string[], me: Me,
   const today = isDay(body?.today) ? body.today : isDay(url.searchParams.get('today')) ? url.searchParams.get('today')! : new Date().toISOString().slice(0, 10);
   const coach = isCoach(me.email);
   const sub = await getSub(me.id);
-  const acc = coach ? { ...access(sub), active: true, plan: 'premium' as PlanId } : access(sub);
+  // Cobrança desligada (fase de testes): todos têm acesso completo. Para ligar, crie PAYMENTS_ENABLED=true na Netlify.
+  const paymentsOn = Netlify.env.get('PAYMENTS_ENABLED') === 'true';
+  const acc = !paymentsOn
+    ? { plan: 'premium' as PlanId, status: 'active', active: true, trialUsed: true, trialDaysLeft: 0, hasPayment: false, free: true }
+    : coach ? { ...access(sub), active: true, plan: 'premium' as PlanId } : access(sub);
 
   if (a === 'state' && method === 'GET') {
     const premium = acc.active && acc.plan === 'premium';

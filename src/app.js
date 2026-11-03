@@ -1238,13 +1238,13 @@ function myRunView(today) {
   if (!a.active) return plansView();
   if (!R.profile) {
     return `
-      ${a.trialDaysLeft ? `<div class="card banner">🎁 Teste grátis do plano ${R.plans[a.plan].name}: faltam ${a.trialDaysLeft} dias.</div>` : ''}
+      ${a.trialDaysLeft && !a.free ? `<div class="card banner">🎁 Teste grátis do plano ${R.plans[a.plan].name}: faltam ${a.trialDaysLeft} dias.</div>` : ''}
       <h2>Monte sua planilha</h2>
       <form class="card" id="run-q">${questionnaire()}<button type="button" class="btn-primary btn-block" data-action="run-generate" style="margin-top:6px">Gerar minha planilha</button></form>`;
   }
   const premium = a.plan === 'premium';
   return `
-    ${a.trialDaysLeft ? `<div class="card banner row between"><span>🎁 Teste grátis: faltam <b>${a.trialDaysLeft} dias</b></span><button class="btn-small btn-blue" data-action="run-subscribe" data-plan="${a.plan}">Assinar</button></div>` : ''}
+    ${a.trialDaysLeft && !a.free ? `<div class="card banner row between"><span>🎁 Teste grátis: faltam <b>${a.trialDaysLeft} dias</b></span><button class="btn-small btn-blue" data-action="run-subscribe" data-plan="${a.plan}">Assinar</button></div>` : ''}
     ${planView(R.profile, R.sessions, today)}
     <h2>💬 Treinador</h2>
     <div class="card">
@@ -1254,7 +1254,7 @@ function myRunView(today) {
     </div>
     <div class="row" style="margin-top:4px">
       <button class="grow" data-action="run-redo">🔄 Refazer planilha</button>
-      ${a.hasPayment || a.status === 'trial' ? '<button class="grow" data-action="run-manage">Assinatura</button>' : ''}
+      ${!a.free && (a.hasPayment || a.status === 'trial') ? '<button class="grow" data-action="run-manage">Assinatura</button>' : ''}
     </div>`;
 }
 
@@ -1270,7 +1270,7 @@ function coachListView() {
         <div class="muted">${x.goal ? GOALS[x.goal] : 'Sem planilha'}${x.raceDate ? ` · prova ${fmtDate(x.raceDate)}` : ''}</div>
         <div class="muted">Últimos 28 dias: ${x.done}/${x.past} treinos${x.past ? ` (${Math.round((x.done / x.past) * 100)}%)` : ''}</div>
       </div>
-      <span class="chip ${x.access.active ? (x.access.plan === 'premium' ? 'on' : 'ok') : ''}">${label(x.access)}</span>
+      ${R.access.free ? '' : `<span class="chip ${x.access.active ? (x.access.plan === 'premium' ? 'on' : 'ok') : ''}">${label(x.access)}</span>`}
     </div>`).join('');
 }
 
@@ -1280,8 +1280,8 @@ function coachAthleteView(today) {
   return `
     <button class="back" data-action="coach-back">← Alunos</button>
     <div class="card row">${avatar(x.user, 44)}<div class="grow"><div class="name">${esc(x.user.name)}</div><div class="muted">${esc(x.user.email)}</div></div>
-      <span class="chip ${a.active ? 'ok' : ''}">${a.active ? R.plans[a.plan].name : 'Inativo'}</span></div>
-    <div class="card">
+      ${R.access.free ? '' : `<span class="chip ${a.active ? 'ok' : ''}">${a.active ? R.plans[a.plan].name : 'Inativo'}</span>`}</div>
+    <div class="card" ${R.access.free ? 'hidden' : ''}>
       <div class="muted" style="margin-bottom:6px">Acesso manual (ex.: pagou por Pix direto)</div>
       <div class="row"><button class="grow btn-small" data-action="coach-access" data-plan="basico">Liberar Básico</button>
         <button class="grow btn-small" data-action="coach-access" data-plan="premium">Liberar Premium</button>
