@@ -1,6 +1,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { getDatabase } from '@netlify/database';
 import { generatePlan, paces, predictRace, type Goal, type Level } from './running-plan.mts';
+import { generateAiPlan, markTo5k, type AiPlan } from './ai-plan.mts';
 
 const sql = getDatabase().sql;
 const json = (data: unknown, status = 200) => Response.json(data, { status });
@@ -51,41 +52,138 @@ function rowToSession(r: any) {
 const sessionsOf = async (userId: string) => (await sql`
   SELECT *, to_char(day, 'YYYY-MM-DD') AS day FROM run_sessions WHERE user_id = ${userId} ORDER BY run_sessions.day`).map(rowToSession);
 
+const GEN_TIMEOUT_MIN = 8; // geração por IA "travada" depois disso
+
 function profileOut(p: any) {
   if (!p) return null;
+  let status = p.plan_status || 'ready';
+  if (status === 'generating' && p.plan_started_at && Date.now() - new Date(p.plan_started_at).getTime() > GEN_TIMEOUT_MIN * 60000) status = 'stale';
   return {
     goal: p.goal, level: p.level, weekdays: p.weekdays, longDay: p.long_day, time5k: p.time_5k,
     raceDate: p.race_date, startDate: p.start_date, weeks: p.weeks, notes: p.notes,
+    daysPerWeek: p.days_per_week || (p.weekdays || []).length, mark: p.mark, target: p.target_time, volumeKm: p.volume_km,
+    meta: p.plan_meta || null, status, source: p.plan_source, error: p.plan_error,
     paces: paces(p.time_5k, p.level), prediction: predictRace(p.time_5k, p.level, p.goal),
   };
 }
-const profileOf = async (userId: string) => profileOut((await sql`
+const profileRow = async (userId: string) => (await sql`
   SELECT *, to_char(race_date, 'YYYY-MM-DD') AS race_date, to_char(start_date, 'YYYY-MM-DD') AS start_date
-  FROM run_profiles WHERE user_id = ${userId}`)[0]);
+  FROM run_profiles WHERE user_id = ${userId}`)[0];
+const profileOf = async (userId: string) => profileOut(await profileRow(userId));
 
-// Gera (ou refaz) a planilha a partir de hoje, mantendo os treinos passados já feitos
-async function buildPlan(userId: string, b: any, today: string) {
+const addDaysStr = (s: string, n: number) => { const d = new Date(`${s}T12:00:00Z`); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+const jsDay = (s: string) => new Date(`${s}T12:00:00Z`).getUTCDay(); // 0 = domingo
+const mondayOf = (s: string) => addDaysStr(s, -((jsDay(s) + 6) % 7));
+const toMon0 = (js: number) => (js + 6) % 7;  // 0 = segunda
+const fromMon0 = (m: number) => (m + 1) % 7;
+
+// Dias de corrida padrão para o gerador de reserva (0 = domingo), a partir do nº de dias e do longão
+function defaultWeekdays(n: number, longDay: number) {
+  const base: Record<number, number[]> = { 3: [2, 4], 4: [2, 4, 6], 5: [1, 2, 4, 5], 6: [1, 2, 3, 4, 5] };
+  const set = new Set((base[n] || base[4]).map((d) => (d === longDay ? (d + 6) % 7 : d)));
+  set.delete(longDay);
+  return [...set, longDay];
+}
+
+// Salva a ficha do corredor (formato da planilha do treinador)
+async function saveProfile(userId: string, b: any, today: string) {
   const goal: Goal = ['5k', '10k', '21k', '42k'].includes(b.goal) ? b.goal : '10k';
-  const level: Level = ['iniciante', 'intermediario', 'avancado'].includes(b.level) ? b.level : 'iniciante';
-  const weekdays = (Array.isArray(b.weekdays) ? b.weekdays : []).map(Number).filter((n: number) => n >= 0 && n <= 6);
-  if (weekdays.length < 2) throw new Error('Escolha pelo menos 2 dias de corrida');
-  const longDay = weekdays.includes(Number(b.longDay)) ? Number(b.longDay) : weekdays[weekdays.length - 1];
-  const time5k = Number(b.time5k) > 600 && Number(b.time5k) < 7200 ? Math.round(Number(b.time5k)) : null;
-  const raceDate = isDay(b.raceDate) && b.raceDate > today ? b.raceDate : null;
+  const level: Level = ['iniciante', 'intermediario', 'avancado'].includes(b.level) ? b.level : 'intermediario';
+  const daysPerWeek = Math.min(6, Math.max(3, parseInt(b.daysPerWeek, 10) || 4));
+  const longDay = [0, 1, 2, 3, 4, 5, 6].includes(Number(b.longDay)) ? Number(b.longDay) : 0;
+  const mark = b.mark ? String(b.mark).slice(0, 120) : null;
+  const target = b.target ? String(b.target).slice(0, 120) : null;
+  const volumeKm = b.volumeKm === '' || b.volumeKm == null ? null : Math.min(300, Math.max(0, Math.round(Number(b.volumeKm)) || 0));
   const notes = b.notes ? String(b.notes).slice(0, 1000) : null;
-
-  const { weeks, sessions } = generatePlan({ goal, level, weekdays, longDay, time5k, raceDate, startDate: today });
+  const start = mondayOf(today);
+  const raceDate = isDay(b.raceDate) && b.raceDate > today ? b.raceDate : null;
+  const weeks = raceDate
+    ? Math.min(20, Math.max(1, Math.floor((new Date(`${raceDate}T12:00:00Z`).getTime() - new Date(`${start}T12:00:00Z`).getTime()) / (7 * 86400000)) + 1))
+    : Math.min(20, Math.max(4, parseInt(b.weeks, 10) || 8));
+  const time5k = markTo5k(mark);
+  const weekdays = defaultWeekdays(daysPerWeek, longDay);
   await sql`
-    INSERT INTO run_profiles (user_id, goal, level, weekdays, long_day, time_5k, race_date, start_date, weeks, notes, updated_at)
-    VALUES (${userId}, ${goal}, ${level}, ${JSON.stringify(weekdays)}::jsonb, ${longDay}, ${time5k}, ${raceDate}, ${today}, ${weeks}, ${notes}, NOW())
+    INSERT INTO run_profiles (user_id, goal, level, weekdays, long_day, time_5k, race_date, start_date, weeks, notes,
+      days_per_week, mark, target_time, volume_km, updated_at)
+    VALUES (${userId}, ${goal}, ${level}, ${JSON.stringify(weekdays)}::jsonb, ${longDay}, ${time5k}, ${raceDate}, ${start}, ${weeks}, ${notes},
+      ${daysPerWeek}, ${mark}, ${target}, ${volumeKm}, NOW())
     ON CONFLICT (user_id) DO UPDATE SET goal = EXCLUDED.goal, level = EXCLUDED.level, weekdays = EXCLUDED.weekdays,
-      long_day = EXCLUDED.long_day, time_5k = EXCLUDED.time_5k, race_date = EXCLUDED.race_date,
-      start_date = EXCLUDED.start_date, weeks = EXCLUDED.weeks, notes = EXCLUDED.notes, updated_at = NOW()`;
+      long_day = EXCLUDED.long_day, time_5k = EXCLUDED.time_5k, race_date = EXCLUDED.race_date, start_date = EXCLUDED.start_date,
+      weeks = EXCLUDED.weeks, notes = EXCLUDED.notes, days_per_week = EXCLUDED.days_per_week, mark = EXCLUDED.mark,
+      target_time = EXCLUDED.target_time, volume_km = EXCLUDED.volume_km, updated_at = NOW()`;
+}
+
+async function replaceSessions(userId: string, today: string, sessions: { day: string; week: number; phase: string; type: string; title: string; description: string; distanceKm: number | null; pace: string | null }[]) {
   await sql`DELETE FROM run_sessions WHERE user_id = ${userId} AND (day >= ${today} OR NOT done)`;
   for (const s of sessions) {
+    if (s.day < today) continue;
     await sql`INSERT INTO run_sessions (id, user_id, day, week, phase, type, title, description, distance_km, pace)
               VALUES (${rid()}, ${userId}, ${s.day}, ${s.week}, ${s.phase}, ${s.type}, ${s.title}, ${s.description}, ${s.distanceKm}, ${s.pace})`;
   }
+}
+
+const AI_TYPE: Record<string, string> = { tempo: 'ritmo' };
+const TITLE: Record<string, string> = { leve: 'Leve', ritmo: 'Tempo', intervalado: 'Intervalado', longo: 'Longão', regenerativo: 'Regenerativo', prova: '🏁 Prova' };
+const kmStr = (n: number) => String(Math.round(n * 10) / 10).replace('.', ',');
+
+// Converte a planilha da IA (semana × dia, segunda a domingo) em treinos com data
+function aiToSessions(plan: AiPlan, start: string) {
+  const out: any[] = [];
+  plan.semanas.forEach((w, wi) => {
+    (w.dias || []).slice(0, 7).forEach((d, di) => {
+      const type = AI_TYPE[d.tipo] || d.tipo;
+      if (type === 'descanso' || !TITLE[type]) return;
+      const km = Number(d.km) || null;
+      const pace = d.ritmo ? (/km/.test(d.ritmo) ? d.ritmo : `${d.ritmo}/km`) : null;
+      out.push({
+        day: addDaysStr(start, (Number(w.numero) - 1 || wi) * 7 + di), week: Number(w.numero) || wi + 1, phase: w.foco || '',
+        type, title: `${TITLE[type]}${km ? ` ${kmStr(km)} km` : ''}`, description: d.descricao || '', distanceKm: km, pace,
+      });
+    });
+  });
+  return out;
+}
+
+async function rulesPlan(userId: string, today: string, error: string | null = null) {
+  const p = await profileRow(userId);
+  const { sessions } = generatePlan({
+    goal: p.goal, level: p.level, weekdays: p.weekdays, longDay: p.long_day, time5k: p.time_5k,
+    raceDate: p.race_date, startDate: today, weeks: p.race_date ? undefined : p.weeks,
+  });
+  await replaceSessions(userId, today, sessions);
+  await sql`UPDATE run_profiles SET plan_status = 'ready', plan_source = 'regras', plan_meta = NULL, plan_error = ${error} WHERE user_id = ${userId}`;
+}
+
+// Chamada pela função de segundo plano: gera com IA e, se falhar, usa o gerador de reserva
+export async function runAiGeneration(userId: string, today: string) {
+  const p = await profileRow(userId);
+  if (!p || p.plan_status !== 'generating') return;
+  const raceDay = p.race_date ? toMon0(jsDay(p.race_date)) : toMon0(p.long_day);
+  try {
+    const plan = await generateAiPlan({
+      goal: p.goal, level: p.level, weeks: p.weeks, daysPerWeek: p.days_per_week || 4, longDay: toMon0(p.long_day), raceDay,
+      raceDate: p.race_date, mark: p.mark, target: p.target_time, volumeKm: p.volume_km, notes: p.notes,
+    });
+    let sessions = aiToSessions(plan, p.start_date);
+    if (p.race_date) sessions = sessions.filter((s) => s.day <= p.race_date);
+    await replaceSessions(userId, today, sessions);
+    const meta = { titulo: plan.titulo, resumo: plan.resumo, zonas: plan.zonas, dicas: plan.dicas };
+    await sql`UPDATE run_profiles SET plan_status = 'ready', plan_source = 'ia', plan_error = NULL, weeks = ${plan.semanas.length}, plan_meta = ${JSON.stringify(meta)}::jsonb WHERE user_id = ${userId}`;
+  } catch (e: any) {
+    console.error('IA', e);
+    await rulesPlan(userId, today, `A IA não respondeu (${String(e?.message || e).slice(0, 120)}). Usamos o gerador padrão.`);
+  }
+}
+
+// Salva a ficha e decide como gerar: IA em segundo plano (se configurada) ou gerador de reserva na hora
+async function startPlan(userId: string, b: any, today: string) {
+  await saveProfile(userId, b, today);
+  if (Netlify.env.get('ANTHROPIC_API_KEY') && b.mode !== 'regras') {
+    await sql`UPDATE run_profiles SET plan_status = 'generating', plan_started_at = NOW(), plan_error = NULL WHERE user_id = ${userId}`;
+    return { mode: 'ia' };
+  }
+  await rulesPlan(userId, today);
+  return { mode: 'regras' };
 }
 
 const messagesOf = async (athleteId: string) => (await sql`
@@ -255,10 +353,8 @@ export async function handleRun(req: Request, url: URL, parts: string[], me: Me,
       if (!u) return err('Aluno não encontrado', 404);
       return json({ user: u, access: access(await getSub(id)), profile: await profileOf(id), sessions: await sessionsOf(id), messages: await messagesOf(id) });
     }
-    if (c === 'regenerate' && id && method === 'POST') {
-      await buildPlan(id, body, today);
-      return json({ ok: true });
-    }
+    if (c === 'regenerate' && id && method === 'POST') return json(await startPlan(id, body, today));
+    if (c === 'fallback' && id && method === 'POST') { await rulesPlan(id, today); return json({ ok: true }); }
     if (c === 'sessions' && method === 'POST') {
       if (!isDay(body.day) || !body.athleteId) return err('Dados inválidos');
       await sql`INSERT INTO run_sessions (id, user_id, day, week, phase, type, title, description, distance_km, pace, coach_note, edited_by_coach)
@@ -298,10 +394,8 @@ export async function handleRun(req: Request, url: URL, parts: string[], me: Me,
   /* ----- Aluno (precisa de acesso) ----- */
   if (!acc.active) return err('Assine um plano para usar a planilha de corrida', 402);
 
-  if (a === 'profile' && method === 'POST') {
-    await buildPlan(me.id, body, today);
-    return json({ ok: true });
-  }
+  if (a === 'profile' && method === 'POST') return json(await startPlan(me.id, body, today));
+  if (a === 'fallback' && method === 'POST') { await rulesPlan(me.id, today); return json({ ok: true }); }
   if (a === 'sessions' && b && method === 'PUT') {
     await sql`UPDATE run_sessions SET done = ${!!body.done}, actual_km = ${body.actualKm === '' || body.actualKm == null ? null : Number(body.actualKm)},
               actual_time = ${body.actualTime ? String(body.actualTime).slice(0, 12) : null},

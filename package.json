@@ -6,11 +6,15 @@
     "build": "node build.mjs"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^1.4.0",
     "@netlify/blobs": "^11.1.7",
     "@netlify/database": "^2.0.1",
     "@netlify/functions": "^6.0.3",
     "@netlify/identity": "^2.0.0",
-    "web-push": "^3.6.7"
+    "jspdf": "^2.5.1",
+    "jspdf-autotable": "^3.8.2",
+    "web-push": "^3.6.7",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@netlify/database-dev": "^1.0.1",

@@ -189,6 +189,7 @@ dialog h3 { margin: 0 0 14px; }
   background: var(--text); color: var(--bg); font-weight: 600; text-align: center; max-width: 90vw;
   padding: 10px 16px; border-radius: 99px; z-index: 20;
   box-shadow: 0 6px 20px rgba(0,0,0,.4);
+  pointer-events: none;
 }
 
 .btn-link { background: none; padding: 4px 0; color: var(--accent2); font-size: 13px; }
@@ -266,3 +267,29 @@ label.btn { display: inline-block; }
 .week summary { cursor: pointer; padding: 6px 0; font-weight: 600; }
 .unread { background: var(--danger); color: #fff; border-radius: 99px; font-size: 11px; padding: 1px 7px; font-weight: 700; }
 .back { background: none; padding: 4px 0; color: var(--accent2); margin-bottom: 8px; }
+
+.seg.mini { display: flex; gap: 4px; padding: 3px; background: var(--card2); border-radius: 10px; }
+.seg.mini button { padding: 5px 10px; font-size: 12px; background: none; }
+.seg.mini button.on { background: var(--accent2); color: var(--accent2-ink); }
+.sheet-wrap { overflow-x: auto; border-radius: var(--radius); background: var(--card); box-shadow: var(--shadow); margin-bottom: 4px; }
+.sheet { border-collapse: collapse; min-width: 760px; width: 100%; font-size: 12px; }
+.sheet th, .sheet td { border: 1px solid var(--line); padding: 6px; vertical-align: top; text-align: left; }
+.sheet th { background: var(--text); color: var(--bg); font-size: 12px; position: sticky; top: 0; }
+.sheet td { cursor: pointer; width: 13%; }
+.sheet td span { display: block; }
+.sheet td.wk { cursor: default; width: 70px; background: var(--card2); }
+.sheet td.wk b { font-size: 16px; display: block; }
+.sheet td.wk span { color: var(--muted); font-size: 11px; }
+.sheet td.wk .vol { color: var(--accent); }
+.sheet td.rest { color: var(--muted); cursor: default; }
+.sheet td.today { outline: 2px solid var(--accent2); outline-offset: -2px; }
+.sheet td.done { background: color-mix(in srgb, var(--accent) 10%, var(--card)); }
+.sheet .km { font-weight: 600; margin-top: 3px; }
+.sheet .rit { color: var(--muted); }
+.sheet .dsc { margin-top: 2px; }
+.tips { margin: 0; padding-left: 20px; font-size: 14px; line-height: 1.6; }
+.loading-card { text-align: center; padding: 24px 16px; }
+.loading-card .big { font-size: 40px; }
+.bar.indeterminate i { width: 40%; animation: slide 1.4s ease-in-out infinite; }
+@keyframes slide { from { margin-left: -40%; } to { margin-left: 100%; } }
+@media (prefers-reduced-motion: reduce) { .bar.indeterminate i { animation: none; width: 100%; opacity: .5; } }

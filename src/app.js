@@ -933,46 +933,55 @@ function weeksOf(sessions) {
   return [...map.entries()];
 }
 
-function planView(profile, sessions, today, { action = 'run-open' } = {}) {
+function planView(profile, sessions, today, { action = 'run-open', who = 'me' } = {}) {
+  if (profile.status === 'generating' || profile.status === 'stale') return generatingView(profile, who === 'coach' ? coachAthlete.user.id : '');
   const cur = sessions.find((s) => s.day >= today) || sessions[sessions.length - 1];
   const curWeek = cur?.week || 1;
   const past = sessions.filter((s) => s.day < today);
   const done = sessions.filter((s) => s.done).length;
   const z = profile.paces;
+  const meta = profile.meta;
   const daysToRace = profile.raceDate ? diffDays(today, profile.raceDate) : null;
+  const zones = meta?.zonas?.length
+    ? meta.zonas.map((x) => `<span>${esc(x.nome)}</span><span>${esc(x.ritmo)}<br><small class="muted">${esc(x.descricao)}</small></span>`).join('')
+    : `<span>Regenerativo</span><span>${esc(z.regenerativo)}</span><span>Leve</span><span>${esc(z.leve)}</span><span>Longão</span><span>${esc(z.longo)}</span>
+       <span>Tempo (limiar)</span><span>${esc(z.ritmo)}</span><span>Intervalado</span><span>${esc(z.intervalado)}</span>`;
   return `
+    ${profile.error ? `<div class="note">⚠️ ${esc(profile.error)}</div>` : ''}
     <div class="card">
       <div class="row between">
-        <div><div class="name">🎯 ${GOALS[profile.goal]}</div>
-          <div class="muted">${LEVELS[profile.level]} · ${profile.weeks} semanas${profile.raceDate ? ` · prova ${fmtDate(profile.raceDate)}` : ''}</div></div>
+        <div><div class="name">🎯 ${esc(meta?.titulo || GOALS[profile.goal])}</div>
+          <div class="muted">${LEVELS[profile.level]} · ${profile.weeks} semanas · ${profile.daysPerWeek} treinos/sem${profile.raceDate ? ` · prova ${fmtDate(profile.raceDate)}` : ''}</div></div>
         ${daysToRace !== null && daysToRace >= 0 ? `<div style="text-align:center"><b style="font-size:22px">${daysToRace}</b><div class="muted">dias</div></div>` : ''}
       </div>
+      ${meta?.resumo ? `<p class="muted" style="margin:8px 0 0">${esc(meta.resumo)}</p>` : ''}
       <div class="bar"><i style="width:${Math.round((done / Math.max(1, sessions.length)) * 100)}%"></i></div>
       <div class="stats" style="grid-template-columns:repeat(3,1fr)">
         <div><b>${curWeek}/${profile.weeks}</b><span>semana · ${esc(cur?.phase || '')}</span></div>
         <div><b>${done}/${sessions.length}</b><span>treinos feitos</span></div>
         <div><b>${past.length ? Math.round((past.filter((s) => s.done).length / past.length) * 100) : 100}%</b><span>em dia</span></div>
       </div>
-      <div class="muted" style="margin-top:10px">Previsão para a prova: <b>${esc(profile.prediction.time)}</b> (${esc(profile.prediction.pace)})</div>
+      ${profile.time5k ? `<div class="muted" style="margin-top:10px">Previsão para a prova: <b>${esc(profile.prediction.time)}</b> (${esc(profile.prediction.pace)})${profile.target ? ` · meta: ${esc(profile.target)}` : ''}</div>` : ''}
     </div>
     <div class="card">
-      <div class="name" style="margin-bottom:8px">Seus ritmos</div>
-      <div class="zones">
-        <span>Regenerativo</span><span>${esc(z.regenerativo)}</span>
-        <span>Leve</span><span>${esc(z.leve)}</span>
-        <span>Longão</span><span>${esc(z.longo)}</span>
-        <span>Ritmo (limiar)</span><span>${esc(z.ritmo)}</span>
-        <span>Intervalado</span><span>${esc(z.intervalado)}</span>
-      </div>
+      <div class="name" style="margin-bottom:8px">Zonas de ritmo</div>
+      <div class="zones">${zones}</div>
     </div>
-    <h2>Planilha</h2>
-    <div class="card">
+    <div class="row between" style="margin:22px 0 10px">
+      <h2 style="margin:0">Planilha</h2>
+      <div class="seg mini">${[['lista', 'Lista'], ['grade', 'Grade']].map(([v, l]) => `<button class="${runLayout === v ? 'on' : ''}" data-action="run-layout" data-v="${v}">${l}</button>`).join('')}</div>
+    </div>
+    ${runLayout === 'grade' ? gridView(profile, sessions, today, action) : `<div class="card">
       ${weeksOf(sessions).map(([w, list]) => `
         <details class="week" ${w === curWeek ? 'open' : ''}>
           <summary>Semana ${w} <span class="muted">· ${esc(list[0].phase || '')} · ${fmtNum(list.reduce((t, s) => t + (s.distanceKm || 0), 0))} km</span></summary>
           ${list.map((s) => runRow(s, today, action)).join('')}
         </details>`).join('') || '<div class="empty">Nenhum treino na planilha.</div>'}
-    </div>`;
+    </div>`}
+    <div class="row" style="margin-top:10px">
+      ${['pdf', 'xlsx', 'csv'].map((k) => `<button class="grow btn-small" data-action="run-export" data-kind="${k}" data-who="${who}">⬇️ ${k === 'xlsx' ? 'Excel' : k.toUpperCase()}</button>`).join('')}
+    </div>
+    ${meta?.dicas?.length ? `<h2>Dicas</h2><div class="card"><ul class="tips">${meta.dicas.map((t) => `<li>${esc(t)}</li>`).join('')}</ul></div>` : ''}`;
 }
 
 function chatView(messages, sendAction, placeholder) {
@@ -1009,48 +1018,219 @@ function plansView() {
 }
 
 function questionnaire(p = {}) {
-  const wd = p.weekdays || [2, 4, 0];
+  const goal = p.goal || '10k';
   return `
-    <label class="field">Objetivo
-      <select name="goal">${Object.entries(GOALS).map(([k, v]) => `<option value="${k}" ${p.goal === k ? 'selected' : ''}>${v}</option>`).join('')}</select>
-    </label>
-    <label class="field">Nível
-      <select name="level">${Object.entries(LEVELS).map(([k, v]) => `<option value="${k}" ${p.level === k ? 'selected' : ''}>${v}</option>`).join('')}</select>
-    </label>
-    <div class="field">Dias em que você pode correr
-      <div class="chips">${WEEKDAYS.map((d, i) => `<label class="chip ${wd.includes(i) ? 'on' : ''}"><input type="checkbox" name="wd" value="${i}" ${wd.includes(i) ? 'checked' : ''} hidden>${d}</label>`).join('')}</div>
+    <div class="field">Objetivo
+      <div class="chips seg-goal">${['5k', '10k', '21k', '42k'].map((g) => `<label class="chip ${goal === g ? 'on' : ''}"><input type="radio" name="goal" value="${g}" ${goal === g ? 'checked' : ''} hidden>${g.toUpperCase()}</label>`).join('')}</div>
     </div>
-    <label class="field">Dia do longão
-      <select name="longDay">${WEEKDAYS.map((d, i) => `<option value="${i}" ${(p.longDay ?? 0) === i ? 'selected' : ''}>${d}</option>`).join('')}</select>
+    <div class="row">
+      <label class="field grow">Nível
+        <select name="level">${Object.entries(LEVELS).map(([k, v]) => `<option value="${k}" ${(p.level || 'intermediario') === k ? 'selected' : ''}>${v}</option>`).join('')}</select>
+      </label>
+      <label class="field grow">Semanas
+        <input name="weeks" type="number" min="4" max="20" value="${p.weeks || 8}">
+      </label>
+    </div>
+    <div class="row">
+      <label class="field grow">Treinos/semana
+        <select name="daysPerWeek">${[3, 4, 5, 6].map((n) => `<option ${(p.daysPerWeek || 4) === n ? 'selected' : ''}>${n}</option>`).join('')}</select>
+      </label>
+      <label class="field grow">Dia do longão
+        <select name="longDay"><option value="6" ${p.longDay === 6 ? 'selected' : ''}>Sábado</option><option value="0" ${p.longDay !== 6 ? 'selected' : ''}>Domingo</option></select>
+      </label>
+    </div>
+    <label class="field">Marca recente <small class="muted">ex: 10 km em 55 min, ou "corro 5 km a 6:00/km"</small>
+      <input name="mark" value="${esc(p.mark || '')}" placeholder="10 km em 55 min">
     </label>
     <div class="row">
-      <label class="field grow">Seu tempo atual nos 5 km<input name="time5k" placeholder="ex. 28:30" value="${fmtSec(p.time5k)}" inputmode="numeric"></label>
-      <label class="field grow">Data da prova<input name="raceDate" type="date" value="${p.raceDate || ''}"></label>
+      <label class="field grow">Meta de tempo <small class="muted">opcional</small><input name="target" value="${esc(p.target || '')}" placeholder="abaixo de 50 min"></label>
+      <label class="field grow">Volume atual (km/sem)<input name="volumeKm" type="number" min="0" max="200" value="${p.volumeKm ?? 20}"></label>
     </div>
-    <label class="field">Observações (lesões, limitações, horários)<textarea name="notes" rows="2">${esc(p.notes || '')}</textarea></label>
-    <div class="muted" style="font-size:12px">Não sabe seu tempo de 5 km? Deixe em branco que usamos uma média para o seu nível.</div>`;
+    <label class="field">Data da prova <small class="muted">opcional — se preencher, as semanas são contadas até ela</small><input name="raceDate" type="date" value="${p.raceDate || ''}"></label>
+    <label class="field">Observações <small class="muted">lesões, horários, terreno, provas no caminho…</small><textarea name="notes" rows="2">${esc(p.notes || '')}</textarea></label>`;
 }
 
 function readQuestionnaire(f) {
   return {
-    goal: f.get('goal'), level: f.get('level'), weekdays: f.getAll('wd').map(Number), longDay: Number(f.get('longDay')),
-    time5k: parseMMSS(f.get('time5k')), raceDate: f.get('raceDate') || null, notes: f.get('notes').trim(),
+    goal: f.get('goal'), level: f.get('level'), weeks: Number(f.get('weeks')), daysPerWeek: Number(f.get('daysPerWeek')),
+    longDay: Number(f.get('longDay')), mark: f.get('mark').trim(), target: f.get('target').trim(),
+    volumeKm: f.get('volumeKm'), raceDate: f.get('raceDate') || null, notes: f.get('notes').trim(),
   };
 }
 
-function chipToggle(ev) { if (ev.target.name === 'wd') ev.target.parentElement.classList.toggle('on', ev.target.checked); }
+function chipToggle(ev) {
+  if (ev.target.name === 'goal') ev.target.closest('.chips').querySelectorAll('label').forEach((l) => l.classList.toggle('on', l.contains(ev.target)));
+}
 
 function openQuestionnaire(p, onSave, title = 'Refazer planilha') {
   openModal(`<h3>${title}</h3>${questionnaire(p)}
     <div class="muted" style="margin:8px 0">Os treinos de hoje em diante serão gerados de novo. Os já feitos ficam no histórico.</div>
     <div class="actions"><button value="cancel" formnovalidate>Cancelar</button><button class="btn-primary" value="ok">Gerar planilha</button></div>`, {
-    onSubmit(f) {
-      const data = readQuestionnaire(f);
-      if (data.weekdays.length < 2) { toast('Escolha pelo menos 2 dias'); return false; }
-      onSave(data);
-    },
+    onSubmit(f) { onSave(readQuestionnaire(f)); },
     onClick: chipToggle,
   });
+}
+
+// Gera a planilha: a IA roda em segundo plano; se não der para chamar, usa o gerador padrão
+let pollTimer = null;
+async function startGeneration(data, athleteId = null) {
+  const r = await runApi(athleteId ? `coach/regenerate/${athleteId}` : 'profile', { method: 'POST', body: data });
+  if (r.mode === 'ia') {
+    const headers = { 'content-type': 'application/json' };
+    if (DEV_USER) headers['x-dev-user'] = JSON.stringify(DEV_USER);
+    const res = await fetch('/bg/plan', { method: 'POST', headers, credentials: 'same-origin', body: JSON.stringify({ today: todayStr(), athleteId }) }).catch(() => null);
+    if (!res || !res.ok) await runApi(athleteId ? `coach/fallback/${athleteId}` : 'fallback', { method: 'POST' });
+  }
+  await refreshRunViews();
+  if (r.mode !== 'ia') toast('Planilha pronta! 🎉');
+}
+
+async function refreshRunViews() {
+  await loadRun();
+  if (coachAthlete) coachAthlete = await runApi(`coach/athlete/${coachAthlete.user.id}`).catch(() => coachAthlete);
+  render();
+}
+
+// Enquanto a IA trabalha, confere a cada 5 s
+function watchGeneration(profile) {
+  if (profile?.status !== 'generating' || pollTimer) return;
+  pollTimer = setTimeout(async () => {
+    pollTimer = null;
+    const was = profile.status;
+    await refreshRunViews();
+    const now = (coachAthlete && runMode === 'alunos' ? coachAthlete.profile : R?.profile);
+    if (was === 'generating' && now?.status === 'ready') toast(now.error ? '⚠️ Planilha feita com o gerador padrão' : 'Planilha pronta! 🎉', 3000);
+  }, 5000);
+}
+
+function generatingView(profile, athleteId = '') {
+  if (profile.status === 'generating') {
+    watchGeneration(profile);
+    return `<div class="card loading-card"><div class="big">🤖</div><div class="name">Montando a planilha…</div>
+      <div class="muted">O treinador virtual está calculando ritmos e progressão. Pode levar até 2 minutos — pode sair do app que ela fica salva.</div>
+      <div class="bar indeterminate"><i></i></div></div>`;
+  }
+  return `<div class="card banner">⏳ A geração demorou demais.
+    <div class="row" style="margin-top:10px"><button class="grow btn-primary" data-action="run-fallback" data-id="${athleteId}">Usar gerador rápido</button>
+    <button class="grow" data-action="${athleteId ? 'coach-redo' : 'run-redo'}">Tentar de novo</button></div></div>`;
+}
+
+/* ---------- Grade semana × dia e downloads (como a planilha do treinador) ---------- */
+
+const GRID_DAYS = ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb', 'Dom'];
+let runLayout = store.get('run-layout', 'lista');
+
+function gridWeeks(profile, sessions) {
+  return weeksOf(sessions).map(([w, list]) => {
+    const days = Array(7).fill(null);
+    for (const s of list) days[(parseDate(s.day).getDay() + 6) % 7] = s;
+    return { w, phase: list[0].phase || '', km: list.reduce((t, s) => t + (s.distanceKm || 0), 0), days };
+  });
+}
+
+function gridView(profile, sessions, today, action) {
+  return `<div class="sheet-wrap"><table class="sheet">
+    <thead><tr><th>Sem.</th>${GRID_DAYS.map((d) => `<th>${d}</th>`).join('')}</tr></thead>
+    <tbody>${gridWeeks(profile, sessions).map((r) => `<tr><td class="wk"><b>S${r.w}</b><span>${esc(r.phase)}</span><span class="vol">${fmtNum(r.km)} km</span></td>${r.days.map((s) => (s
+      ? `<td class="${s.done ? 'done' : ''} ${s.day === today ? 'today' : ''}" data-action="${action}" data-id="${s.id}">${typeChip(s.type)}${s.distanceKm ? `<span class="km">${fmtNum(s.distanceKm)} km</span>` : ''}${s.pace ? `<span class="rit">${esc(s.pace)}</span>` : ''}<span class="dsc">${esc(s.description || '')}</span>${s.done ? '<span>✅</span>' : ''}</td>`
+      : '<td class="rest">Descanso</td>')).join('')}</tr>`).join('')}</tbody></table></div>`;
+}
+
+function saveBlob(blob, filename) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+}
+
+function cellText(s) {
+  if (!s) return 'Descanso';
+  return [TYPES[s.type] || s.type, s.distanceKm ? `${fmtNum(s.distanceKm)} km` : '', s.pace ? `@ ${s.pace}` : '', s.description || ''].filter(Boolean).join(' · ');
+}
+
+async function exportPlan(kind, profile, sessions, athleteName) {
+  const title = profile.meta?.titulo || `${GOALS[profile.goal]} · ${LEVELS[profile.level]}`;
+  const name = `${athleteName ? `${athleteName} ` : ''}${title}`.normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^\w]+/g, '-').replace(/^-|-$/g, '').toLowerCase() || 'plano-corrida';
+  const rows = gridWeeks(profile, sessions);
+  const detail = [['Semana', 'Data', 'Dia', 'Tipo', 'Distância (km)', 'Ritmo', 'Descrição', 'Feito?']];
+  sessions.forEach((s) => detail.push([s.week, fmtDate(s.day, { day: '2-digit', month: '2-digit', year: 'numeric' }), GRID_DAYS[(parseDate(s.day).getDay() + 6) % 7], TYPES[s.type] || s.type, s.distanceKm ?? '', s.pace || '', s.description || '', s.done ? 'Sim' : '']));
+  try {
+    if (kind === 'csv') {
+      saveBlob(new Blob(['﻿' + detail.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(';')).join('\r\n')], { type: 'text/csv' }), `${name}.csv`);
+    } else if (kind === 'xlsx') {
+      const X = await import('xlsx'); const wb = X.utils.book_new();
+      const s1 = X.utils.aoa_to_sheet([['Semana', 'Foco', 'Volume (km)', ...GRID_DAYS], ...rows.map((r) => [r.w, r.phase, Math.round(r.km), ...r.days.map(cellText)])]);
+      s1['!cols'] = [{ wch: 8 }, { wch: 14 }, { wch: 12 }, ...GRID_DAYS.map(() => ({ wch: 34 }))];
+      X.utils.book_append_sheet(wb, s1, 'Planilha');
+      const s2 = X.utils.aoa_to_sheet(detail); s2['!cols'] = [{ wch: 8 }, { wch: 12 }, { wch: 6 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 60 }, { wch: 8 }];
+      X.utils.book_append_sheet(wb, s2, 'Detalhado');
+      const z = profile.meta?.zonas || [];
+      if (z.length) X.utils.book_append_sheet(wb, X.utils.aoa_to_sheet([['Zona', 'Ritmo', 'Descrição'], ...z.map((x) => [x.nome, x.ritmo, x.descricao])]), 'Zonas');
+      saveBlob(new Blob([X.write(wb, { bookType: 'xlsx', type: 'array' })], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), `${name}.xlsx`);
+    } else {
+      const [{ jsPDF }, at] = await Promise.all([import('jspdf'), import('jspdf-autotable')]);
+      const autoTable = [at.default, at.default?.default, at.autoTable].find((f) => typeof f === 'function');
+      saveBlob(buildPdf(jsPDF, autoTable, profile, rows, title, athleteName), `${name}.pdf`);
+    }
+    toast('Arquivo baixado');
+  } catch (e) { toast(`⚠️ ${e.message}`); }
+}
+
+const PDF_FILL = { leve: [226, 243, 232], regenerativo: [226, 243, 232], ritmo: [252, 240, 210], intervalado: [251, 224, 221], prova: [251, 224, 221], longo: [221, 232, 250] };
+const PDF_INK = { leve: [31, 120, 72], regenerativo: [31, 120, 72], ritmo: [150, 100, 0], intervalado: [180, 40, 32], prova: [180, 40, 32], longo: [34, 84, 165] };
+
+// PDF em A4 deitado, no mesmo estilo da planilha do treinador
+function buildPdf(jsPDF, autoTable, profile, rows, title, athleteName) {
+  const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+  const W = doc.internal.pageSize.getWidth(), M = 10;
+  const clean = (s) => String(s ?? '').replace(/[^\x20-\x7E -ÿ–—…×\n]/g, '');
+  const total = rows.reduce((t, r) => t + r.km, 0), peak = Math.max(0, ...rows.map((r) => r.km));
+  doc.setFillColor(21, 32, 26); doc.rect(0, 0, W, 24, 'F');
+  doc.setFillColor(214, 70, 31); doc.rect(0, 24, W, 1.4, 'F');
+  doc.setTextColor(255, 255, 255); doc.setFont('helvetica', 'bold'); doc.setFontSize(18); doc.text(clean(title), M, 11);
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(10);
+  doc.text(clean([athleteName ? `Atleta: ${athleteName}` : '', `${rows.length} semanas`, `${Math.round(total)} km no total`, `pico de ${Math.round(peak)} km/semana`].filter(Boolean).join('   ·   ')), M, 18.5);
+  let y = 31; doc.setTextColor(60, 70, 64);
+  if (profile.meta?.resumo) { const l = doc.splitTextToSize(clean(profile.meta.resumo), W - 2 * M); doc.text(l, M, y); y += l.length * 4.4 + 2; }
+  const zonas = profile.meta?.zonas?.length ? profile.meta.zonas.map((z) => `${z.nome}: ${z.ritmo}`)
+    : ['regenerativo', 'leve', 'longo', 'ritmo', 'intervalado'].map((k) => `${TYPES[k]}: ${profile.paces[k]}`);
+  doc.setFont('helvetica', 'bold'); doc.setTextColor(21, 32, 26); doc.setFontSize(9);
+  const zl = doc.splitTextToSize(clean(`Zonas de ritmo   ${zonas.join('     ')}`), W - 2 * M); doc.text(zl, M, y); y += zl.length * 4.2 + 1;
+  doc.setFont('helvetica', 'normal');
+  const kinds = rows.map((r) => r.days.map((s) => (s ? s.type : 'descanso')));
+  autoTable(doc, {
+    startY: y + 1, margin: { left: M, right: M, bottom: 14 },
+    head: [['Semana', ...GRID_DAYS]],
+    body: rows.map((r) => [`S${r.w}\n${r.phase}\n${Math.round(r.km)} km`, ...r.days.map((s) => (s ? [(TYPES[s.type] || s.type).toUpperCase(), [s.distanceKm ? `${fmtNum(s.distanceKm)} km` : '', s.pace ? `@ ${s.pace}` : ''].filter(Boolean).join('  '), s.description || ''].filter(Boolean).join('\n') : 'Descanso'))].map(clean)),
+    theme: 'grid',
+    styles: { font: 'helvetica', fontSize: 7.4, cellPadding: 1.6, valign: 'top', lineColor: [210, 216, 210], lineWidth: 0.2, textColor: [25, 32, 28], overflow: 'linebreak' },
+    headStyles: { fillColor: [21, 32, 26], textColor: [255, 255, 255], fontStyle: 'bold', fontSize: 9, halign: 'center' },
+    columnStyles: { 0: { cellWidth: 22, fontStyle: 'bold', fillColor: [238, 241, 237] } },
+    rowPageBreak: 'avoid',
+    didParseCell: (h) => {
+      if (h.section !== 'body' || h.column.index === 0) return;
+      const k = kinds[h.row.index][h.column.index - 1];
+      h.cell.styles.fillColor = PDF_FILL[k] || [244, 245, 244];
+      if (k === 'descanso') h.cell.styles.textColor = [130, 140, 134];
+    },
+    didDrawCell: (h) => {
+      if (h.section !== 'body' || h.column.index === 0) return;
+      const k = kinds[h.row.index][h.column.index - 1];
+      if (!PDF_INK[k]) return;
+      doc.setFillColor(...PDF_INK[k]); doc.rect(h.cell.x, h.cell.y, 1.1, h.cell.height, 'F');
+    },
+  });
+  const dicas = profile.meta?.dicas || [];
+  if (dicas.length) {
+    let yy = doc.lastAutoTable.finalY + 7; const H = doc.internal.pageSize.getHeight();
+    const lines = dicas.flatMap((t) => doc.splitTextToSize(`•  ${clean(t)}`, W - 2 * M));
+    if (yy + 6 + lines.length * 4.2 > H - 14) { doc.addPage(); yy = 16; }
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(10); doc.setTextColor(21, 32, 26); doc.text('DICAS', M, yy);
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(8.6); doc.setTextColor(60, 70, 64); doc.text(lines, M, yy + 5);
+  }
+  const n = doc.getNumberOfPages(), H = doc.internal.pageSize.getHeight();
+  for (let i = 1; i <= n; i++) { doc.setPage(i); doc.setFontSize(7.5); doc.setTextColor(130, 140, 134); doc.text(clean(`${athleteName ? `${athleteName} · ` : ''}${title}`), M, H - 6); doc.text(`${i}/${n}`, W - M, H - 6, { align: 'right' }); }
+  return doc.output('blob');
 }
 
 function myRunView(today) {
@@ -1107,7 +1287,7 @@ function coachAthleteView(today) {
         <button class="grow btn-small" data-action="coach-access" data-plan="premium">Liberar Premium</button>
         <button class="btn-small btn-danger" data-action="coach-access" data-status="cancelled">Bloquear</button></div>
     </div>
-    ${x.profile ? `${x.profile.notes ? `<div class="note">📋 ${esc(x.profile.notes)}</div>` : ''}${planView(x.profile, x.sessions, today, { action: 'coach-session' })}` : '<div class="card empty">Este aluno ainda não preencheu o questionário.</div>'}
+    ${x.profile ? `${x.profile.notes ? `<div class="note">📋 ${esc(x.profile.notes)}</div>` : ''}${planView(x.profile, x.sessions, today, { action: 'coach-session', who: 'coach' })}` : '<div class="card empty">Este aluno ainda não preencheu o questionário.</div>'}
     <div class="row" style="margin-bottom:12px">
       <button class="grow" data-action="coach-add">+ Adicionar treino</button>
       <button class="grow" data-action="coach-redo">🔄 Gerar planilha</button>
@@ -1263,14 +1443,21 @@ async function handleRunAction(d, t) {
     case 'run-refresh': await runApi('refresh', { method: 'POST' }).catch(() => {}); await loadRun(); return render();
     case 'run-manage': return openManage();
     case 'run-generate': {
-      const f = new FormData($('#run-q'));
-      const data = readQuestionnaire(f);
-      if (data.weekdays.length < 2) return toast('Escolha pelo menos 2 dias');
-      try { t.disabled = true; t.textContent = 'Gerando…'; await runApi('profile', { method: 'POST', body: data }); await loadRun(); render(); toast('Planilha pronta! 🎉'); } catch (e) { toast(`⚠️ ${e.message}`); t.disabled = false; }
+      const data = readQuestionnaire(new FormData($('#run-q')));
+      if (!data.mark && !confirm('Sem a marca recente, os ritmos ficam menos precisos. Gerar mesmo assim?')) return;
+      try { t.disabled = true; t.textContent = 'Enviando…'; await startGeneration(data); } catch (e) { toast(`⚠️ ${e.message}`); t.disabled = false; }
       return;
     }
     case 'run-redo':
-      return openQuestionnaire(R.profile, (data) => runApi('profile', { method: 'POST', body: data }).then(loadRun).then(render).then(() => toast('Planilha atualizada!')).catch((e) => toast(`⚠️ ${e.message}`)));
+      return openQuestionnaire(R.profile, (data) => startGeneration(data).catch((e) => toast(`⚠️ ${e.message}`)));
+    case 'run-fallback':
+      try { await runApi(d.id ? `coach/fallback/${d.id}` : 'fallback', { method: 'POST' }); await refreshRunViews(); toast('Planilha pronta!'); } catch (e) { toast(`⚠️ ${e.message}`); }
+      return;
+    case 'run-layout': runLayout = d.v; store.set('run-layout', runLayout); return render();
+    case 'run-export': {
+      const src = d.who === 'coach' ? coachAthlete : R;
+      return exportPlan(d.kind, src.profile, src.sessions, d.who === 'coach' ? coachAthlete.user.name : S.me.name);
+    }
     case 'run-open': return openRunSession(R.sessions.find((s) => s.id === d.id));
     case 'run-send': {
       const text = chatText(); if (!text) return;
@@ -1282,8 +1469,7 @@ async function handleRunAction(d, t) {
     case 'coach-session': return openCoachSession(coachAthlete.sessions.find((s) => s.id === d.id), coachAthlete.user.id);
     case 'coach-add': return openCoachSession(null, coachAthlete.user.id);
     case 'coach-redo':
-      return openQuestionnaire(coachAthlete.profile || {}, (data) => runApi(`coach/regenerate/${coachAthlete.user.id}`, { method: 'POST', body: data })
-        .then(() => openCoachAthlete(coachAthlete.user.id)).then(() => toast('Planilha gerada')).catch((e) => toast(`⚠️ ${e.message}`)), `Planilha de ${coachAthlete.user.name}`);
+      return openQuestionnaire(coachAthlete.profile || {}, (data) => startGeneration(data, coachAthlete.user.id).catch((e) => toast(`⚠️ ${e.message}`)), `Planilha de ${coachAthlete.user.name}`);
     case 'coach-access': {
       const body = d.status ? { status: d.status, plan: coachAthlete.access.plan } : { status: 'active', plan: d.plan };
       if (!confirm(d.status ? 'Bloquear o acesso deste aluno?' : `Liberar o plano ${R.plans[d.plan].name} para este aluno?`)) return;
@@ -1377,7 +1563,7 @@ $view.addEventListener('click', (ev) => {
 // Ajuste de reps/carga de uma série. Séries seguintes ainda não feitas recebem o mesmo valor.
 $view.addEventListener('change', (ev) => {
   const t = ev.target;
-  if (t.name === 'wd') { t.parentElement.classList.toggle('on', t.checked); return; }
+  if (t.name === 'goal') { chipToggle(ev); return; }
   if (t.dataset.action === 'reminder-hour') {
     const hour = t.value === '' ? null : Number(t.value);
     setReminder(hour).then(() => toast(hour === null ? 'Lembrete desligado' : `Lembrete às ${String(hour).padStart(2, '0')}:00`)).catch((e) => toast(`⚠️ ${e.message}`));

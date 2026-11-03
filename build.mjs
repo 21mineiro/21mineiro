@@ -11,7 +11,9 @@ await build({
   bundle: true,
   minify: true,
   format: 'esm',
+  splitting: true, // PDF e Excel só carregam quando alguém baixa a planilha
+  chunkNames: 'chunks/[name]-[hash]',
   target: ['safari15', 'chrome100'],
-  outfile: 'dist/app.js',
+  outdir: 'dist',
 });
 console.log('build ok');

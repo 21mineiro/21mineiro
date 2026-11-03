@@ -16,6 +16,7 @@ export type Profile = {
   time5k: number | null;   // segundos
   raceDate: string | null; // YYYY-MM-DD
   startDate: string;       // YYYY-MM-DD
+  weeks?: number;          // duração fixa (sem data de prova)
 };
 
 export type Session = {
@@ -137,7 +138,7 @@ function tempoWorkout(total: number, pace: string) {
 /* ---------- Gerador ---------- */
 
 export function generatePlan(p: Profile): { weeks: number; sessions: Session[] } {
-  const weeks = planWeeks(p);
+  const weeks = p.weeks ?? planWeeks(p);
   const z = paces(p.time5k, p.level);
   const days = [...new Set(p.weekdays)].sort((a, b) => a - b);
   if (!days.includes(p.longDay)) days.push(p.longDay);
