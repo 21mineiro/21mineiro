@@ -731,3 +731,13 @@ body.logged-out main { padding-top: calc(16px + env(safe-area-inset-top)); }
 .countdown > p { margin: 0; }
 .next-run .facts { align-items: center; }
 .tile .v small { margin-left: 2px; }
+
+/* Escolha do programa de treino */
+.hero-pick { text-align: center; padding: 20px 16px; }
+.hero-pick .big { font-size: 40px; }
+.program.chosen { border-color: var(--good); }
+.prog-list { margin-top: 10px; }
+.prog-list summary { cursor: pointer; font-weight: 600; font-size: 14px; color: var(--link); }
+.prog-w { display: flex; justify-content: space-between; gap: 8px; margin-top: 12px; font-size: 14px; }
+.prog-ex { font-size: 13px; margin-top: 2px; }
+.prog-head .name { font-size: 15px; }

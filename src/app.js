@@ -166,7 +166,7 @@ function newLog(day, w) {
       const sets = last?.sets?.length
         ? last.sets.map((s) => ({ reps: s.reps, weight: s.weight, done: false }))
         : Array.from({ length: Math.max(1, e.sets) }, () => ({ reps: e.reps, weight: e.weight, done: false }));
-      return { exId: e.id, name: e.name, sets };
+      return { exId: e.id, name: e.name, sets, ...(e.unit ? { unit: e.unit } : {}) };
     }),
   };
 }
@@ -353,15 +353,17 @@ function challengeToday(c, today) {
   </div>`;
 }
 
-function setRow(day, w, ei, si, s) {
+function setRow(day, w, ei, si, s, unit) {
   const a = `data-w="${w.id}" data-e="${ei}" data-s="${si}" data-day="${day}"`;
   return `
     <div class="set ${s.done ? 'done' : ''}">
       <span class="set-n">${si + 1}</span>
-      <input type="number" inputmode="numeric" min="0" value="${s.reps}" data-action="set-field" data-field="reps" ${a} aria-label="Repetições">
+      ${unit === 'seg'
+        ? `<input type="number" inputmode="numeric" min="0" value="${s.reps}" data-action="set-field" data-field="reps" ${a} aria-label="Segundos"><span class="muted">seg</span>`
+        : `<input type="number" inputmode="numeric" min="0" value="${s.reps}" data-action="set-field" data-field="reps" ${a} aria-label="Repetições">
       <span class="muted">×</span>
       <input type="number" inputmode="decimal" min="0" step="0.5" value="${s.weight}" data-action="set-field" data-field="weight" ${a} aria-label="Carga">
-      <span class="muted">kg</span>
+      <span class="muted">kg</span>`}
       <button class="check sm ${s.done ? 'on' : ''}" data-action="set-done" ${a} data-pop="s-${w.id}-${ei}-${si}" aria-label="Série ${si + 1} feita" aria-pressed="${s.done}">✓</button>
     </div>`;
 }
@@ -393,7 +395,7 @@ function workoutCard(day, w) {
             <button class="btn-small" data-action="set-add" data-w="${w.id}" data-e="${ei}" data-day="${day}" aria-label="Adicionar série">+</button>
           </div>
         </div>
-        ${e.sets.map((s, si) => setRow(day, w, ei, si, s)).join('')}
+        ${e.sets.map((s, si) => setRow(day, w, ei, si, s, e.unit || w.exercises.find((x) => x.id === e.exId)?.unit)).join('')}
       </div>`;
     }).join('')}
     <button class="btn-block ${log.finished ? '' : 'btn-primary'}" style="margin-top:14px" data-action="finish" data-w="${w.id}" data-day="${day}">
@@ -447,7 +449,7 @@ function viewToday() {
     ${active.length ? active.map((c) => challengeToday(c, today)).join('') : `<div class="card empty"><div class="big">🎯</div>Nenhum desafio ativo ainda.<br><br><button class="btn-primary" data-action="new-challenge">+ Criar desafio</button> <button data-action="join">Entrar com código</button></div>`}
     ${runTodayCard(today)}
     <h2>Treino de hoje · ${WEEKDAYS[parseDate(today).getDay()]}</h2>
-    ${list.length ? list.map((w) => workoutCard(today, w)).join('') : `<div class="card empty"><div class="big">${S.workouts.length ? '😴' : '🏋️'}</div>${S.workouts.length ? 'Dia de descanso. Recuperar também é treino.' : 'Cadastre seus treinos na aba Treinos.'}</div>`}
+    ${list.length ? list.map((w) => workoutCard(today, w)).join('') : `<div class="card empty"><div class="big">${S.workouts.length ? '😴' : '🏋️'}</div>${S.workouts.length ? 'Dia de descanso. Recuperar também é treino.' : 'Você ainda não escolheu seu treino.<br><br><button class="btn-primary" data-action="go-workouts">Escolher meu treino</button>'}</div>`}
     ${S.workouts.length ? `<button class="btn-block" data-action="pick-workout" data-day="${today}">+ Fazer outro treino hoje</button>` : ''}
   `;
 }
@@ -541,14 +543,17 @@ function viewChallenges() {
   const active = S.challenges.filter(isActive).length;
   const won = S.challenges.filter((c) => challengeStats(c).status === 'concluído').length;
   const best = Math.max(0, ...S.challenges.filter((c) => c.kind !== 'weekly').map((c) => challengeStats(c).best));
-  const marked = S.challenges.reduce((t, c) => t + Object.values(myChecks(c)).filter((e) => dayDone(c, e)).length, 0);
-  const perWeek = weekly(8, (d) => S.challenges.reduce((t, c) => t + (dayDone(c, myChecks(c)[d]) ? 1 : 0), 0));
+  // Dias marcados = dias diferentes com pelo menos um desafio cumprido; atividades = total de marcações
+  const daysSet = new Set();
+  let acts = 0;
+  for (const c of S.challenges) for (const [d, e] of Object.entries(myChecks(c))) if (dayDone(c, e)) { daysSet.add(d); acts++; }
+  const perWeek = weekly(8, (d) => (daysSet.has(d) ? 1 : 0));
   return `
     ${S.challenges.length ? `<div class="kpis">
-      ${tile('Ativos', active)}
-      ${tile('Vencidos', won)}
+      ${tile('Desafios ativos', active, { delta: `${won} ${won === 1 ? 'vencido' : 'vencidos'}` })}
       ${tile('Melhor sequência', `${best}<small> ${best === 1 ? 'dia' : 'dias'}</small>`)}
-      ${tile('Dias marcados', marked, { delta: `${perWeek[perWeek.length - 1].value} nesta semana`, spark: sparkline(perWeek.map((w) => w.value), 'Dias marcados por semana, últimas 8 semanas') })}
+      ${tile('Dias marcados', `${daysSet.size}<small> ${daysSet.size === 1 ? 'dia' : 'dias'}</small>`, { delta: `${perWeek[perWeek.length - 1].value} nesta semana`, spark: sparkline(perWeek.map((w) => w.value), 'Dias marcados por semana, últimas 8 semanas') })}
+      ${tile('Atividades marcadas', acts, { delta: 'somando todos os desafios' })}
     </div>` : ''}
     <div class="row" style="margin-bottom:14px">
       <button class="btn-primary grow" data-action="new-challenge">+ Novo desafio</button>
@@ -556,6 +561,123 @@ function viewChallenges() {
     </div>
     ${sorted.length ? sorted.map((c) => challengeCard(c, today)).join('') : '<div class="card empty"><div class="big">🏆</div>Crie um desafio ou entre no de um amigo com o código de convite.</div>'}
   `;
+}
+
+/* ================= Programas de treino prontos ================= */
+
+// x(nome, séries, repetições[, 'seg'])  — 'seg' = exercício por tempo
+const x = (name, sets, reps, unit) => ({ name, sets, reps, weight: 0, ...(unit ? { unit } : {}) });
+const PROGRAMS = {
+  completo: {
+    name: 'Treino Completo', icon: '🏋️', days: 'Seg a sex · 5 treinos',
+    desc: 'Divisão A a E para treinar todos os grupos musculares na semana.',
+    workouts: [
+      { letter: 'A', name: 'Treino A – Peito, ombro e tríceps', weekdays: [1], exercises: [
+        x('Supino inclinado com halteres', 4, 10), x('Supino reto (máquina ou barra)', 4, 10), x('Peitoral voador', 4, 10),
+        x('Elevação lateral', 3, 12), x('Tríceps corda', 4, 10), x('Tríceps francês', 4, 10), x('Tríceps testa', 4, 10)] },
+      { letter: 'B', name: 'Treino B – Costas e bíceps', weekdays: [2], exercises: [
+        x('Puxada aberta pronada', 4, 10), x('Remada baixa neutra', 4, 10), x('Remada curvada pronada', 3, 10),
+        x('Voador inverso', 3, 10), x('Rosca direta na polia', 4, 10), x('Rosca martelo com halter', 4, 10), x('Rosca scott', 3, 10)] },
+      { letter: 'C', name: 'Treino C – Quadríceps e posterior', weekdays: [3], exercises: [
+        x('Agachamento na barra guiada', 4, 10), x('Banco extensor', 4, 10), x('Banco adutor', 4, 10),
+        x('Afundo (cada perna)', 3, 10), x('Banco flexor', 3, 10), x('Mesa flexora', 3, 10), x('Panturrilha', 4, 12)] },
+      { letter: 'D', name: 'Treino D – Ombro e core', weekdays: [4], exercises: [
+        x('Desenvolvimento (halteres ou máquina)', 4, 10), x('Elevação lateral', 4, 10), x('Elevação frontal', 3, 12),
+        x('Prancha', 3, 30, 'seg'), x('Abdominal infra', 3, 10)] },
+      { letter: 'E', name: 'Treino E – Posterior e glúteo', weekdays: [5], exercises: [
+        x('Banco flexor', 4, 10), x('Mesa flexora', 4, 10), x('Elevação pélvica', 4, 10),
+        x('Banco abdutor', 4, 10), x('Stiff (barra ou halter)', 3, 10)] },
+    ],
+  },
+  corrida: {
+    name: 'Fortalecimento para corrida', icon: '🏃', days: 'Seg, qua e sex · 3 treinos',
+    desc: 'Força para correr melhor e com menos risco de lesão.',
+    workouts: [
+      { letter: 'A', name: 'Treino A – Pernas e core', weekdays: [1], exercises: [
+        x('Agachamento unilateral no banco ou caixa (cada perna)', 4, 10), x('Banco adutor', 3, 10), x('Banco extensor', 4, 10),
+        x('Agachamento na barra guiada', 3, 10), x('Banco flexor', 4, 10), x('Prancha', 3, 30, 'seg')] },
+      { letter: 'B', name: 'Treino B – Peito, ombro e tríceps', weekdays: [3], exercises: [
+        x('Peitoral voador', 4, 10), x('Supino inclinado (halteres ou barra)', 3, 10), x('Supino reto (barra ou halteres)', 3, 10),
+        x('Desenvolvimento (halteres ou aparelho)', 3, 12), x('Elevação lateral', 4, 10), x('Tríceps corda', 4, 10),
+        x('Tríceps francês', 3, 10), x('Prancha lateral', 3, 30, 'seg')] },
+      { letter: 'C', name: 'Treino C – Costas, glúteo e posterior', weekdays: [5], exercises: [
+        x('Puxada aberta pronada', 4, 10), x('Remada baixa', 4, 10), x('Voador inverso', 4, 10), x('Banco abdutor', 3, 12),
+        x('Elevação pélvica', 4, 10), x('Flexor unilateral (cada perna)', 4, 10), x('Stiff', 3, 10)] },
+    ],
+  },
+};
+
+// Programa atual: os treinos de programa têm o id começando com "pg-<programa>-"
+function currentProgram() {
+  const w = S.workouts.find((x) => x.id.startsWith('pg-'));
+  return w ? w.id.split('-')[1] : null;
+}
+
+const fmtEx = (e) => (e.unit === 'seg' ? `${e.sets}x${e.reps} seg` : `${e.sets}x${e.reps}`);
+
+function programCard(key, chosen) {
+  const p = PROGRAMS[key];
+  return `
+    <div class="card program ${chosen ? 'chosen' : ''}">
+      <div class="row">
+        <div class="wk-ico" aria-hidden="true">${p.icon}</div>
+        <div class="grow"><div class="name">${p.name}</div><div class="muted">${p.days}</div></div>
+      </div>
+      <p class="muted" style="margin-top:10px">${p.desc}</p>
+      <details class="prog-list">
+        <summary>Ver os treinos</summary>
+        ${p.workouts.map((w) => `<div class="prog-w"><b>${esc(w.name)}</b><span class="muted">${WEEKDAYS[w.weekdays[0]]}</span></div>
+          <div class="muted prog-ex">${w.exercises.map((e) => `${esc(e.name)} ${fmtEx(e)}`).join(' · ')}</div>`).join('')}
+      </details>
+      ${chosen ? '<span class="chip ok" style="margin-top:12px;display:inline-block">✓ Seu treino atual</span>'
+        : `<button class="btn-primary btn-block" style="margin-top:12px" data-action="pick-program" data-v="${key}">Escolher este</button>`}
+    </div>`;
+}
+
+function programChooser() {
+  const cur = currentProgram();
+  const custom = !cur && S.workouts.length > 0;
+  return `
+    <div class="card hero-pick"><div class="big">💪</div><div class="name" style="font-size:19px">Escolha seu treino</div>
+      <div class="muted">Pegue um programa pronto ou monte o seu. Dá para trocar depois.</div></div>
+    ${programCard('completo', cur === 'completo')}
+    ${programCard('corrida', cur === 'corrida')}
+    <div class="card program ${custom ? 'chosen' : ''}">
+      <div class="row">
+        <div class="wk-ico" aria-hidden="true">✍️</div>
+        <div class="grow"><div class="name">Criar meu treino</div><div class="muted">Do seu jeito, com seus exercícios</div></div>
+      </div>
+      ${custom ? '<span class="chip ok" style="margin-top:12px;display:inline-block">✓ Seu treino atual</span>'
+        : '<button class="btn-block" style="margin-top:12px" data-action="pick-program" data-v="custom">Criar o meu</button>'}
+    </div>
+    ${S.workouts.length ? '<button class="btn-block" data-action="close-chooser">Voltar</button>' : ''}`;
+}
+
+let showChooser = false;
+
+// Troca o programa: apaga os treinos atuais (o histórico fica) e cria os novos
+async function pickProgram(key) {
+  const cur = currentProgram();
+  const custom = !cur && S.workouts.length > 0;
+  if (key === cur || (key === 'custom' && custom)) { showChooser = false; return render(); }
+  if (S.workouts.length && !confirm('Isso troca os seus treinos atuais. O histórico do que você já fez continua guardado. Trocar?')) return;
+  const old = S.workouts;
+  S.workouts = [];
+  if (key !== 'custom') {
+    const p = PROGRAMS[key];
+    S.workouts = p.workouts.map((w, i) => ({
+      id: `pg-${key}-${w.letter}-${uid().slice(0, 8)}`, name: w.name, weekdays: w.weekdays,
+      exercises: w.exercises.map((e) => ({ id: uid(), ...e })), position: i,
+    }));
+  }
+  showChooser = false; tab = 'treinos'; store.set('tab', tab); enterAnim = true;
+  render();
+  try {
+    for (const w of old) await api(`workouts/${w.id}`, { method: 'DELETE' });
+    for (const w of S.workouts) await api(`workouts/${w.id}`, { method: 'PUT', body: w });
+    if (key === 'custom') openWorkoutForm();
+    else { toast(`${PROGRAMS[key].icon} ${PROGRAMS[key].name} escolhido!`); celebrate('small'); }
+  } catch (e) { toast(`⚠️ ${e.message}`); await reload(); }
 }
 
 function viewWorkouts() {
@@ -566,14 +688,20 @@ function viewWorkouts() {
   const weekStart = addDays(today, -parseDate(today).getDay());
   const volume = S.logs.filter((l) => l.day >= weekStart).reduce((t, l) => t + l.exercises.reduce((u, e) => u + e.sets.filter((s) => s.done || l.finished).reduce((v, s) => v + (Number(s.reps) || 0) * (Number(s.weight) || 0), 0), 0), 0);
   const lastDone = (w) => finished.filter((l) => l.workoutId === w.id).map((l) => l.day).sort().pop();
+  if (showChooser || !S.workouts.length) return programChooser();
+  const prog = currentProgram();
   return `
+    <div class="card row prog-head">
+      <div class="grow"><div class="muted">Seu treino</div><div class="name">${prog ? `${PROGRAMS[prog].icon} ${PROGRAMS[prog].name}` : '✍️ Meu treino'}</div></div>
+      <button class="btn-small" data-action="open-chooser">Trocar</button>
+    </div>
     ${finished.length ? `<div class="kpis">
       ${tile('Nesta semana', perWeek[perWeek.length - 1].value, { delta: 'treinos concluídos', spark: sparkline(perWeek.map((w) => w.value), 'Treinos por semana, últimas 8 semanas') })}
       ${tile('Últimos 30 dias', last30, { delta: 'treinos' })}
       ${tile('Volume na semana', `${fmtNum(Math.round(volume))}<small> kg</small>`, { delta: 'séries × reps × carga' })}
       ${tile('No total', finished.length, { delta: 'treinos concluídos' })}
     </div>` : ''}
-    <button class="btn-primary btn-block" data-action="new-workout" style="margin-bottom:14px">+ Novo treino</button>
+    ${prog ? '' : '<button class="btn-primary btn-block" data-action="new-workout" style="margin-bottom:14px">+ Novo treino</button>'}
     ${S.workouts.length ? S.workouts.map((w) => {
       const last = lastDone(w);
       return `
@@ -590,7 +718,7 @@ function viewWorkouts() {
           const h = exerciseHistory(e.name);
           const lastP = h[h.length - 1];
           return `<div class="ex-line">
-            <span class="grow">${esc(e.name)} <span class="muted">· ${e.sets}x${e.reps} · ${fmtNum(lastP ? lastP.max : e.weight)} kg</span></span>
+            <span class="grow">${esc(e.name)} <span class="muted">· ${fmtEx(e)}${e.unit === 'seg' ? '' : ` · ${fmtNum(lastP ? lastP.max : e.weight)} kg`}</span></span>
             ${h.length >= 2 ? `<span class="ex-spark">${sparkline(h.slice(-8).map((p) => p.max), `Carga de ${e.name} nas últimas vezes`, { fromZero: false })}</span>` : ''}
             <button class="btn-small" data-action="chart" data-name="${esc(e.name)}" aria-label="Evolução de ${esc(e.name)}">📈</button>
           </div>`;
@@ -903,7 +1031,7 @@ function openWorkoutForm(w) {
   const isNew = !w;
   w = w || { id: uid(), name: '', weekdays: [], exercises: [] };
   const exRow = (e = {}) => `
-    <div class="ex-edit" data-exid="${e.id || ''}">
+    <div class="ex-edit" data-exid="${e.id || ''}" data-unit="${e.unit || ''}">
       <input name="ex-name" placeholder="Exercício" value="${esc(e.name || '')}">
       <input name="ex-sets" type="number" inputmode="numeric" min="1" value="${e.sets ?? 3}" aria-label="Séries">
       <input name="ex-reps" type="number" inputmode="numeric" min="0" value="${e.reps ?? 12}" aria-label="Repetições">
@@ -933,6 +1061,7 @@ function openWorkoutForm(w) {
         sets: Number(row.querySelector('[name=ex-sets]').value) || 1,
         reps: Number(row.querySelector('[name=ex-reps]').value) || 0,
         weight: Number(row.querySelector('[name=ex-weight]').value) || 0,
+        ...(row.dataset.unit ? { unit: row.dataset.unit } : {}),
       })).filter((e) => e.name);
       Object.assign(w, { name: f.get('name').trim(), weekdays: f.getAll('wd').map(Number), exercises });
       if (isNew) S.workouts.push(w);
@@ -1751,6 +1880,10 @@ $view.addEventListener('click', (ev) => {
       return save(saveLog(log, true));
     }
     case 'chart': return openChart(d.name);
+    case 'pick-program': return pickProgram(d.v);
+    case 'open-chooser': showChooser = true; enterAnim = true; render(); return window.scrollTo(0, 0);
+    case 'close-chooser': showChooser = false; return render();
+    case 'go-workouts': tab = 'treinos'; store.set('tab', tab); enterAnim = true; render(); return window.scrollTo(0, 0);
     case 'rest-cycle': {
       const opts = [60, 90, 120, 180];
       const next = opts[(opts.indexOf(restDefault()) + 1) % opts.length];

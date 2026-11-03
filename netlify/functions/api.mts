@@ -243,6 +243,7 @@ export default async (req: Request, context: Context) => {
       const exercises = (Array.isArray(body.exercises) ? body.exercises : []).slice(0, 40).map((e: any) => ({
         id: String(e.id || rid()), name: String(e.name || '').slice(0, 80),
         sets: Number(e.sets) || 0, reps: Number(e.reps) || 0, weight: Number(e.weight) || 0,
+        ...(e.unit === 'seg' ? { unit: 'seg' } : {}), // exercício por tempo (ex.: prancha)
       }));
       const [owner] = await sql`SELECT user_id FROM workouts WHERE id = ${id}`;
       if (owner && owner.user_id !== me.id) return err('Sem acesso', 403);
