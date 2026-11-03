@@ -3,7 +3,7 @@ import { getUser, handleAuthCallback, oauthLogin, logout, refreshSession, login,
 // App nativo (lojas): no iPhone o login é só por e-mail e senha
 const NATIVE = !!window.Capacitor?.isNativePlatform?.();
 const NATIVE_IOS = NATIVE && window.Capacitor.getPlatform?.() === 'ios';
-import { ring, sparkline, columns, lineChart, heatmap, vizTable, initTooltips, haptic, celebrate, startRest, stopRest, restDefault, setRestDefault, levelFor, greeting, quoteOfDay } from './ui.js';
+import { ring, sparkline, columns, lineChart, monthCalendar, vizTable, initTooltips, haptic, celebrate, startRest, stopRest, restDefault, setRestDefault, levelFor, greeting, quoteOfDay } from './ui.js';
 
 /* ================= Utilidades ================= */
 
@@ -1100,10 +1100,10 @@ function viewProfile() {
       ${tile('Melhor sequência', `${bestStreak}<small> ${bestStreak === 1 ? 'dia' : 'dias'}</small>`)}
     </div>
 
-    <h2>Constelação de atividades</h2>
+    <h2>Calendário de atividades</h2>
     <div class="card">
-      <div class="viz-head"><div class="name">Seus dias ativos</div><span class="muted">últimas 16 semanas</span></div>
-      ${heatmap(acts, today, { weeks: 16, addDays, label: `Mapa de calor: ${[...acts.keys()].length} dias com atividade` })}
+      <div class="viz-head"><div class="name">Seus dias ativos</div><span class="muted">últimos 3 meses</span></div>
+      ${monthCalendar(acts, today, { months: 3, label: `Calendário: ${[...acts.keys()].length} dias com atividade` })}
       ${vizTable(['Semana de', 'Atividades'], heatWeeks.slice().reverse().map((w) => [w.label, String(w.value)]))}
     </div>
 

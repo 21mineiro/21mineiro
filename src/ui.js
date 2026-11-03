@@ -161,6 +161,35 @@ export function heatmap(counts, today, { weeks = 16, dateStr, addDays, label } =
     <div class="heat-scale">Menos <i style="background:var(--heat-0)"></i><i style="background:var(--heat-1)"></i><i style="background:var(--heat-2)"></i><i style="background:var(--heat-3)"></i><i style="background:var(--heat-4)"></i><i style="background:var(--heat-5)"></i> Mais</div>`;
 }
 
+/* ---------- Calendário por mês (deitado): 1–16 em cima, 17–31 embaixo ---------- */
+export function monthCalendar(counts, today, { months = 3, label } = {}) {
+  const t = new Date(`${today}T12:00:00`);
+  const pad = (n) => String(n).padStart(2, '0');
+  const blocks = [];
+  for (let k = months - 1; k >= 0; k--) {
+    const ref = new Date(t.getFullYear(), t.getMonth() - k, 1, 12);
+    const y = ref.getFullYear(), m = ref.getMonth();
+    const last = new Date(y, m + 1, 0).getDate();
+    const name = ref.toLocaleDateString('pt-BR', { month: 'long' });
+    let trained = 0;
+    const cells = [];
+    for (let d = 1; d <= 32; d++) {
+      if (d > last) { cells.push('<i class="void"></i>'); continue; }
+      const day = `${y}-${pad(m + 1)}-${pad(d)}`;
+      if (day > today) { cells.push(`<i class="fut">${d}</i>`); continue; }
+      const n = counts.get(day) || 0;
+      if (n) trained++;
+      const lv = n >= 5 ? 5 : n;
+      const when = new Date(`${day}T12:00:00`).toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: 'short' });
+      cells.push(`<i class="${lv ? `h${lv}` : ''} ${day === today ? 'today' : ''}" tabindex="0" data-tip="${n ? `${n} ${n === 1 ? 'atividade' : 'atividades'}` : 'Sem atividade'}|${esc(when)}">${d}</i>`);
+    }
+    blocks.push(`<div class="mcal-head"><b>${esc(name)}</b><span>${trained} ${trained === 1 ? 'dia ativo' : 'dias ativos'}</span></div>
+      <div class="mcal">${cells.join('')}</div>`);
+  }
+  return `<div role="img" aria-label="${esc(label || 'Calendário de dias ativos')}">${blocks.join('')}</div>
+    <div class="heat-scale">Nada <i style="background:var(--heat-0)"></i><i style="background:var(--mcal-1)"></i><i style="background:var(--mcal-2)"></i><i style="background:var(--mcal-3)"></i><i style="background:var(--mcal-4)"></i> Mais</div>`;
+}
+
 /* ---------- Dica ao tocar / passar o mouse ---------- */
 const tip = () => document.getElementById('tip');
 function showTip(text, rect) {
