@@ -553,6 +553,120 @@ function todayTasks(today) {
   return { total: items.length, done: items.filter(Boolean).length };
 }
 
+// ---------- Resumo da semana (cartão para o Instagram) ----------
+// Semana de domingo a sábado. Domingo e segunda mostram a semana que passou.
+function summaryWeekStart(today = todayStr()) {
+  const dow = parseDate(today).getDay();
+  const sunday = addDays(today, -dow);
+  return dow <= 1 ? addDays(sunday, -7) : sunday;
+}
+function weekSummary(start) {
+  const end = addDays(start, 6);
+  const inWeek = (d) => d >= start && d <= end;
+  const logs = S.logs.filter((l) => inWeek(l.day) && (l.finished || l.exercises.some((e) => e.sets.some((x) => x.done))));
+  const acts = activityByDay();
+  const days = [...acts.keys()].filter(inWeek).length;
+  const workouts = logs.filter((l) => l.finished).length;
+  const sets = logs.reduce((t, l) => t + l.exercises.reduce((u, e) => u + e.sets.filter((x) => x.done || l.finished).length, 0), 0);
+  const volume = logs.reduce((t, l) => t + l.exercises.reduce((u, e) => u + e.sets.filter((x) => x.done || l.finished).reduce((v, x) => v + (Number(x.reps) || 0) * (Number(x.weight) || 0), 0), 0), 0);
+  const cardio = S.logs.filter((l) => inWeek(l.day) && l.cardio?.done).reduce((t, l) => t + (Number(l.cardio.minutes) || 0), 0);
+  const streak = Math.max(0, ...S.challenges.filter(isActive).map((c) => challengeStats(c).streak));
+  // recordes batidos na semana
+  const before = personalRecords();
+  const prs = Object.values(before).filter((r) => inWeek(r.day));
+  const dots = Array.from({ length: 7 }, (_, i) => acts.has(addDays(start, i)));
+  return { start, end, days, workouts, sets, volume, cardio, streak, prs, dots };
+}
+
+async function drawSummary(w) {
+  const W = 1080, Hh = 1920;
+  const cv = document.createElement('canvas'); cv.width = W; cv.height = Hh;
+  const g = cv.getContext('2d');
+  try { await document.fonts.load('700 80px "Space Grotesk"'); } catch { /* usa a fonte do sistema */ }
+  const F = (w8, px) => `${w8} ${px}px "Space Grotesk", system-ui, sans-serif`;
+  g.fillStyle = '#0f1412'; g.fillRect(0, 0, W, Hh);
+  g.fillStyle = '#16a34a'; g.fillRect(0, 0, W, 16);
+  // logo
+  const logo = await new Promise((r) => { const i = new Image(); i.onload = () => r(i); i.onerror = () => r(null); i.src = '/icon-192.png'; });
+  if (logo) g.drawImage(logo, 90, 120, 120, 120);
+  g.fillStyle = '#ecf3ef'; g.font = F(700, 44); g.fillText('Desafios & Treinos', 236, 172);
+  g.fillStyle = '#94a39b'; g.font = F(500, 34);
+  const per = `${fmtDate(w.start, { day: '2-digit', month: 'short' })} a ${fmtDate(w.end, { day: '2-digit', month: 'short' })}`;
+  g.fillText(per, 236, 220);
+  g.fillStyle = '#ecf3ef'; g.font = F(700, 96); g.fillText('A semana', 90, 420);
+  g.fillStyle = '#4ade80'; g.font = F(700, 96); g.fillText(`de ${firstName(S.me.name)}`, 90, 525);
+  // dias da semana
+  const L = 'DSTQQSS';
+  for (let i = 0; i < 7; i++) {
+    const x = 90 + i * 132, y = 620;
+    g.fillStyle = w.dots[i] ? '#22c55e' : '#1f2925';
+    g.beginPath(); g.roundRect(x, y, 108, 108, 26); g.fill();
+    g.fillStyle = w.dots[i] ? '#06210f' : '#94a39b'; g.font = F(700, 40); g.textAlign = 'center';
+    if (w.dots[i]) g.fillText('✓', x + 54, y + 70);
+    g.textAlign = 'left';
+    g.fillStyle = '#94a39b'; g.font = F(500, 26); g.textAlign = 'center'; g.fillText(L[i], x + 54, y + 150); g.textAlign = 'left';
+  }
+  // números
+  const stats = [
+    [`${w.days}`, w.days === 1 ? 'dia ativo' : 'dias ativos'],
+    [`${w.workouts}`, w.workouts === 1 ? 'treino' : 'treinos'],
+    [`${w.sets}`, 'séries feitas'],
+    [w.volume >= 1000 ? `${fmtNum(Math.round(w.volume / 100) / 10)} t` : `${fmtNum(Math.round(w.volume))} kg`, 'levantados'],
+    [`${w.cardio}`, 'min de cardio'],
+    [`${w.streak}`, w.streak === 1 ? 'dia de sequência' : 'dias de sequência'],
+  ];
+  stats.forEach(([v, l], i) => {
+    const x = 90 + (i % 2) * 465, y = 880 + Math.floor(i / 2) * 250;
+    g.fillStyle = '#171d1a'; g.beginPath(); g.roundRect(x, y, 435, 220, 34); g.fill();
+    g.fillStyle = '#ecf3ef'; g.font = F(700, 92); g.fillText(v, x + 40, y + 120);
+    g.fillStyle = '#94a39b'; g.font = F(500, 34); g.fillText(l, x + 40, y + 176);
+  });
+  // recorde
+  let y = 1660;
+  if (w.prs.length) {
+    const r = w.prs.sort((a, b) => b.kg - a.kg)[0];
+    g.fillStyle = '#4ade80'; g.font = F(700, 38); g.fillText(`🏆 Recorde: ${r.name.slice(0, 26)} ${fmtNum(r.kg)} kg`, 90, y);
+    y += 70;
+  }
+  g.fillStyle = '#94a39b'; g.font = F(500, 32); g.fillText('desafios-treinos.netlify.app', 90, 1840);
+  return new Promise((r) => cv.toBlob(r, 'image/png'));
+}
+
+async function openSummary() {
+  const w = weekSummary(summaryWeekStart());
+  openModal(`
+    <h3>Resumo da semana</h3>
+    <div id="sum-box" class="sum-box"><div class="muted">Gerando…</div></div>
+    <div class="actions">
+      <button value="cancel">Fechar</button>
+      <button type="button" class="btn-primary" data-m="share">${navigator.canShare ? 'Compartilhar' : 'Baixar imagem'}</button>
+    </div>`, {
+    async onClick(ev) {
+      if (!ev.target.closest('[data-m=share]')) return;
+      const blob = await blobP;
+      const file = new File([blob], 'minha-semana.png', { type: 'image/png' });
+      if (navigator.canShare?.({ files: [file] })) {
+        navigator.share({ files: [file], title: 'Minha semana' }).catch(() => {});
+      } else {
+        const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'minha-semana.png'; a.click();
+      }
+    },
+  });
+  const blobP = drawSummary(w);
+  const blob = await blobP;
+  $('#sum-box').innerHTML = `<img src="${URL.createObjectURL(blob)}" alt="Resumo da semana: ${w.days} dias ativos, ${w.workouts} treinos">`;
+}
+
+function summaryBanner(today) {
+  const dow = parseDate(today).getDay();
+  if (dow > 1) return '';
+  const w = weekSummary(summaryWeekStart(today));
+  if (!w.days) return '';
+  return `<button class="card sum-banner" data-action="summary">
+    <span class="grow"><b>Seu resumo da semana está pronto</b><small>${w.days} ${w.days === 1 ? 'dia ativo' : 'dias ativos'} · ${w.workouts} ${w.workouts === 1 ? 'treino' : 'treinos'} · toque para compartilhar</small></span><span class="go-arrow">›</span>
+  </button>`;
+}
+
 function heroToday(today) {
   const t = todayTasks(today);
   const xp = computeXP();
@@ -590,6 +704,7 @@ function viewToday() {
   }
   return `
     ${heroToday(today)}
+    ${summaryBanner(today)}
     <h2>Desafios de hoje</h2>
     ${active.length ? active.map((c) => challengeToday(c, today)).join('') : `<div class="card empty"><div class="big">🎯</div>Nenhum desafio ativo ainda.<br><br><button class="btn-primary" data-action="new-challenge">+ Criar desafio</button> <button data-action="join">Entrar com código</button></div>`}
     ${runTodayCard(today)}
@@ -1280,6 +1395,8 @@ function viewProfile() {
         <div class="xp-txt">${fmtNum(xp)} de energia${lv.next ? ` · faltam ${fmtNum(lv.toNext)} para ${lv.next.icon} ${lv.next.name}` : ' · nível máximo!'}</div>
       </div>
     </div>
+
+    <button class="btn-block" data-action="summary" style="margin:4px 0 6px">Ver resumo da semana para compartilhar</button>
 
     ${measuresSection(S.measures || [], true)}
 
@@ -2536,6 +2653,7 @@ $view.addEventListener('click', (ev) => {
     case 'tr-apply': return coachApplyProgram();
     case 'tr-copy': return coachCopyWorkouts();
     case 'measure-new': return openMeasure();
+    case 'summary': return openSummary();
     case 'rank-period': rankPeriod = d.v; teamRank = null; return render();
     case 'tr-mode': coachMode = d.v; store.set('coach-mode', coachMode); coachUsers = null; return render();
     case 'tr-pick': return openPickAthletes(d.v);
