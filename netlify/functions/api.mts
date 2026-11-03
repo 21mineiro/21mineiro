@@ -82,6 +82,7 @@ async function getState(me: Me) {
     })),
     workouts: workouts.map((w: any) => ({ id: w.id, name: w.name, weekdays: w.weekdays, exercises: w.exercises })),
     logs: logs.map(logOut),
+    catalog: await sql`SELECT id, name, video, tip FROM exercises ORDER BY lower(name)`,
   };
 }
 
@@ -105,6 +106,15 @@ function workoutIn(body: any) {
     ...(e.tip ? { tip: String(e.tip).trim().slice(0, 240) } : {}),
   }));
   return { name: String(body.name || 'Treino').slice(0, 80), weekdays, exercises, position: Number(body.position) || 0 };
+}
+
+// Só vale exercício que está no catálogo
+async function offCatalog(exercises: any[]) {
+  const names = [...new Set(exercises.map((e) => String(e.name).trim().toLowerCase()))];
+  if (!names.length) return [];
+  const rows = await sql`SELECT lower(name) AS n FROM exercises WHERE lower(name) = ANY(${names})`;
+  const ok = new Set(rows.map((r: any) => r.n));
+  return exercises.filter((e) => !ok.has(String(e.name).trim().toLowerCase())).map((e) => e.name);
 }
 
 // Dono = e-mails em COACH_EMAILS (Netlify). Treinador = dono ou alguém que o dono adicionou.
@@ -228,6 +238,36 @@ export default async (req: Request, context: Context) => {
       return json({ ok: true });
     }
 
+    // Catálogo de exercícios: treinadores cadastram/editam, só o dono apaga
+    if (res === 'exercises' && id && (method === 'PUT' || method === 'DELETE')) {
+      const role = await roleOf(me.email);
+      if (!role.coach) return err('Só treinadores mexem na lista de exercícios', 403);
+      if (method === 'DELETE') {
+        if (!role.owner) return err('Só o dono pode apagar exercícios', 403);
+        await sql`DELETE FROM exercises WHERE id = ${id}`;
+        return json({ ok: true });
+      }
+      const name = String(body.name || '').trim().replace(/\s+/g, ' ').slice(0, 80);
+      if (!name) return err('Dê um nome ao exercício');
+      const video = /^https?:\/\//i.test(String(body.video || '').trim()) ? String(body.video).trim().slice(0, 300) : null;
+      const tip = String(body.tip || '').trim().slice(0, 240) || null;
+      const [dup] = await sql`SELECT id FROM exercises WHERE lower(name) = ${name.toLowerCase()} AND id <> ${id}`;
+      if (dup) return err('Já existe um exercício com esse nome');
+      const [old] = await sql`SELECT name FROM exercises WHERE id = ${id}`;
+      await sql`
+        INSERT INTO exercises (id, name, video, tip, created_by) VALUES (${id}, ${name}, ${video}, ${tip}, ${me.email})
+        ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, video = EXCLUDED.video, tip = EXCLUDED.tip`;
+      // Renomeou: atualiza os treinos que usam o nome antigo
+      if (old && old.name !== name) {
+        await sql`
+          UPDATE workouts SET exercises = (
+            SELECT jsonb_agg(CASE WHEN e->>'name' = ${old.name} THEN jsonb_set(e, '{name}', to_jsonb(${name}::text)) ELSE e END)
+            FROM jsonb_array_elements(exercises) e)
+          WHERE exercises @> jsonb_build_array(jsonb_build_object('name', ${old.name}::text))`;
+      }
+      return json({ id, name, video, tip });
+    }
+
     // Desafios
     if (res === 'challenges' && method === 'POST') {
       const f = challengeFields(body);
@@ -326,6 +366,8 @@ export default async (req: Request, context: Context) => {
         sets: Number(e.sets) || 0, reps: Number(e.reps) || 0, weight: Number(e.weight) || 0,
         ...(e.unit === 'seg' ? { unit: 'seg' } : {}), // exercício por tempo (ex.: prancha)
       }));
+      const bad = await offCatalog(exercises);
+      if (bad.length) return err(`Escolha exercícios da lista: ${bad.join(', ')}`);
       const [owner] = await sql`SELECT user_id FROM workouts WHERE id = ${id}`;
       if (owner && owner.user_id !== me.id) return err('Sem acesso', 403);
       await sql`
@@ -410,6 +452,8 @@ export default async (req: Request, context: Context) => {
         if (!sid.startsWith('co-') || !body.athleteId) return err('Dados inválidos');
         if (!(await canSee(body.athleteId))) return err('Este aluno não é seu', 403);
         const w = workoutIn(body);
+        const bad = await offCatalog(w.exercises);
+        if (bad.length) return err(`Escolha exercícios da lista: ${bad.join(', ')}`);
         const [owner] = await sql`SELECT user_id FROM workouts WHERE id = ${sid}`;
         if (owner && owner.user_id !== body.athleteId) return err('Sem acesso', 403);
         await sql`

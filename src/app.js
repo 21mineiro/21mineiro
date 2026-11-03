@@ -722,12 +722,64 @@ async function openCoachUser(id) {
 function viewCoach() {
   if (coachUser) return coachUserView();
   if (!coachUsers) { loadCoachUsers(); return '<div class="empty">Carregando alunos…</div>'; }
-  const seg = S.me.owner ? `<div class="card seg" style="grid-template-columns:1fr 1fr">
-      ${[['alunos', '👥 Alunos'], ['treinadores', '🧑‍🏫 Treinadores']].map(([v, l]) => `<button class="${coachMode === v ? 'on' : ''}" data-action="tr-mode" data-v="${v}">${l}</button>`).join('')}
-    </div>` : '';
+  const modes = [['alunos', '👥 Alunos'], ['exercicios', '📚 Exercícios'], ...(S.me.owner ? [['treinadores', '🧑‍🏫 Treinadores']] : [])];
+  if (!modes.some(([v]) => v === coachMode)) coachMode = 'alunos';
+  const seg = `<div class="card seg" style="grid-template-columns:repeat(${modes.length},1fr)">
+      ${modes.map(([v, l]) => `<button class="${coachMode === v ? 'on' : ''}" data-action="tr-mode" data-v="${v}">${l}</button>`).join('')}
+    </div>`;
+  if (coachMode === 'exercicios') return seg + catalogView();
   if (S.me.owner && coachMode === 'treinadores') return seg + coachesView();
   const list = coachUsers.filter((u) => u.id !== myId() && !(S.me.owner && u.owner));
   return seg + coachAthletesList(list);
+}
+
+// Catálogo: cada exercício com vídeo e dica
+function catalogView() {
+  const list = catalog();
+  const withVideo = list.filter((c) => c.video).length;
+  return `
+    <p class="muted" style="margin:0 4px 12px">Os treinos só usam exercícios desta lista. Coloque o vídeo e a dica uma vez e todos os alunos veem.</p>
+    <div class="kpis">${tile('Exercícios', list.length)}${tile('Com vídeo', `${withVideo}<small> de ${list.length}</small>`)}</div>
+    <button class="btn-primary btn-block" data-action="cat-new" style="margin-bottom:10px">➕ Novo exercício</button>
+    <input type="search" class="cat-search" data-action="cat-search" placeholder="Buscar exercício…" aria-label="Buscar exercício">
+    <div class="card cat-list">
+      ${list.map((c) => `
+        <button class="cat-row" data-action="cat-edit" data-id="${esc(c.id)}" data-q="${esc(c.name.toLowerCase())}">
+          <span class="grow"><b>${esc(c.name)}</b>${c.tip ? `<small>💡 ${esc(c.tip)}</small>` : ''}</span>
+          <span class="chip ${c.video ? 'ok' : ''}">${c.video ? '▶ vídeo' : 'sem vídeo'}</span>
+        </button>`).join('')}
+    </div>`;
+}
+
+function openCatalogItem(item) {
+  const isNew = !item;
+  item = item || { id: uid(), name: '', video: '', tip: '' };
+  openModal(`
+    <h3>${isNew ? '➕ Novo exercício' : '✏️ Exercício'}</h3>
+    <label class="field">Nome<input name="name" required maxlength="80" value="${esc(item.name)}" placeholder="Ex: Agachamento livre"></label>
+    <label class="field">Link do vídeo<input name="video" type="url" inputmode="url" value="${esc(item.video || '')}" placeholder="https://youtube.com/…"></label>
+    <label class="field">Dica para o aluno<input name="tip" maxlength="240" value="${esc(item.tip || '')}" placeholder="Ex: costas retas, desce devagar"></label>
+    ${item.video ? `<p><a href="${esc(item.video)}" target="_blank" rel="noopener">▶ Testar o vídeo</a></p>` : ''}
+    ${isNew ? '' : '<p class="muted">Se mudar o nome, os treinos que já usam este exercício são atualizados.</p>'}
+    <div class="actions">
+      ${!isNew && S.me.owner ? '<button type="button" class="btn-danger" data-m="delete">Apagar</button>' : ''}
+      <button value="cancel" formnovalidate>Cancelar</button>
+      <button class="btn-primary" value="ok">Salvar</button>
+    </div>`, {
+    onSubmit(f) {
+      saveCatalogItem({ id: item.id, name: f.get('name'), video: f.get('video'), tip: f.get('tip') })
+        .then(() => { toast('Exercício salvo ✅'); render(); })
+        .catch((e) => { toast(`⚠️ ${e.message}`); });
+    },
+    onClick(ev) {
+      const t = ev.target.closest('[data-m=delete]');
+      if (!t || !confirm(`Apagar "${item.name}" da lista? Treinos que já usam continuam com ele.`)) return;
+      $modal.close();
+      api(`exercises/${encodeURIComponent(item.id)}`, { method: 'DELETE' })
+        .then(() => { S.catalog = catalog().filter((c) => c.id !== item.id); toast('Exercício apagado'); render(); })
+        .catch((e) => toast(`⚠️ ${e.message}`));
+    },
+  });
 }
 
 function coachesView() {
@@ -1128,8 +1180,9 @@ function openChart(name) {
 const $modal = $('#modal');
 const $form = $('#modal-form');
 
-function openModal(html, { onSubmit, onClick } = {}) {
+function openModal(html, { onSubmit, onClick, onChange } = {}) {
   $form.innerHTML = html;
+  $form.onchange = onChange || null;
   $form.onsubmit = (ev) => {
     if (!ev.submitter || ev.submitter.value !== 'ok') return;
     if (onSubmit && onSubmit(new FormData($form)) === false) ev.preventDefault();
@@ -1285,8 +1338,29 @@ function removeCheck(c, day) {
 }
 
 // "Como fazer": vídeo do treinador ou busca no YouTube, mais a dica
+const catalog = () => S.catalog || [];
+const catalogItem = (name) => catalog().find((c) => c.name.toLowerCase() === String(name || '').trim().toLowerCase());
+
+// Opções do seletor de exercício (só nomes do catálogo)
+function exOptions(selected = '') {
+  const items = catalog().map((c) => c.name);
+  if (selected && !catalogItem(selected)) items.push(selected); // treino antigo com nome fora da lista
+  items.sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  const cur = catalogItem(selected)?.name || selected;
+  return `<option value="" disabled ${selected ? '' : 'selected'}>Escolha o exercício…</option>
+    ${items.map((n) => `<option ${n === cur ? 'selected' : ''}>${esc(n)}</option>`).join('')}
+    ${S.me.coach ? '<option value="__new">➕ Cadastrar novo exercício…</option>' : ''}`;
+}
+
+async function saveCatalogItem(item) {
+  const saved = await api(`exercises/${encodeURIComponent(item.id)}`, { method: 'PUT', body: item });
+  S.catalog = [...catalog().filter((c) => c.id !== saved.id), saved].sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
+  return saved;
+}
+
 function howTo(e, w) {
-  const src = w.exercises.find((x) => x.id === e.exId) || w.exercises.find((x) => x.name === e.name) || {};
+  const own = w.exercises.find((x) => x.id === e.exId) || w.exercises.find((x) => x.name === e.name) || {};
+  const src = { ...own, ...Object.fromEntries(Object.entries(catalogItem(e.name) || {}).filter(([, v]) => v)) };
   const url = src.video || `https://www.youtube.com/results?search_query=${encodeURIComponent(`${e.name} execução correta`)}`;
   return `<div class="howto">
     <a href="${esc(url)}" target="_blank" rel="noopener" class="howto-btn">▶ Como fazer</a>
@@ -1300,17 +1374,12 @@ function openWorkoutForm(w, coach = null) {
   w = w || { id: coach ? `co-${uid().slice(0, 13)}` : uid(), name: '', weekdays: [], exercises: [] };
   const exRow = (e = {}) => `
     <div class="ex-item" data-exid="${e.id || ''}" data-unit="${e.unit || ''}">
+      <select name="ex-name" required aria-label="Exercício">${exOptions(e.name)}</select>
       <div class="ex-edit">
-        <input name="ex-name" placeholder="Exercício" value="${esc(e.name || '')}">
         <input name="ex-sets" type="number" inputmode="numeric" min="1" value="${e.sets ?? 3}" aria-label="Séries">
         <input name="ex-reps" type="number" inputmode="numeric" min="0" value="${e.reps ?? 12}" aria-label="Repetições">
         <input name="ex-weight" type="number" inputmode="decimal" min="0" step="0.5" value="${e.weight ?? 0}" aria-label="Carga">
         <button type="button" data-m="rm-ex" aria-label="Remover">✕</button>
-      </div>
-      <button type="button" class="btn-link ex-more-btn" data-m="ex-more" ${e.video || e.tip ? 'hidden' : ''}>▶ Vídeo e dica</button>
-      <div class="ex-extra" ${e.video || e.tip ? '' : 'hidden'}>
-        <input name="ex-video" type="url" inputmode="url" placeholder="Link do vídeo (YouTube, Instagram…)" value="${esc(e.video || '')}">
-        <input name="ex-tip" maxlength="240" placeholder="Dica: ex. costas retas, desce devagar" value="${esc(e.tip || '')}">
       </div>
     </div>`;
   openModal(`
@@ -1320,7 +1389,7 @@ function openWorkoutForm(w, coach = null) {
       <div class="chips">${WEEKDAYS.map((d, i) => `<label class="chip ${w.weekdays.includes(i) ? 'on' : ''}"><input type="checkbox" name="wd" value="${i}" ${w.weekdays.includes(i) ? 'checked' : ''} hidden>${d}</label>`).join('')}</div>
     </div>
     <div class="field">Exercícios
-      <div class="ex-edit ex-head"><span>Nome</span><span>Séries</span><span>Reps</span><span>Kg</span><span></span></div>
+      <div class="ex-edit ex-head"><span>Séries</span><span>Reps</span><span>Kg</span><span></span></div>
       <div id="ex-list">${w.exercises.map(exRow).join('')}${isNew ? exRow() : ''}</div>
       <button type="button" data-m="add-ex">+ Exercício</button>
     </div>
@@ -1337,8 +1406,6 @@ function openWorkoutForm(w, coach = null) {
         reps: Number(row.querySelector('[name=ex-reps]').value) || 0,
         weight: Number(row.querySelector('[name=ex-weight]').value) || 0,
         ...(row.dataset.unit ? { unit: row.dataset.unit } : {}),
-        ...(row.querySelector('[name=ex-video]').value.trim() ? { video: row.querySelector('[name=ex-video]').value.trim() } : {}),
-        ...(row.querySelector('[name=ex-tip]').value.trim() ? { tip: row.querySelector('[name=ex-tip]').value.trim() } : {}),
       })).filter((e) => e.name);
       Object.assign(w, { name: f.get('name').trim(), weekdays: f.getAll('wd').map(Number), exercises });
       if (coach) {
@@ -1350,14 +1417,24 @@ function openWorkoutForm(w, coach = null) {
       if (isNew) S.workouts.push(w);
       save(api(`workouts/${w.id}`, { method: 'PUT', body: { ...w, position: S.workouts.indexOf(w) } }));
     },
+    onChange(ev) {
+      const sel = ev.target;
+      if (sel.name !== 'ex-name' || sel.value !== '__new') return;
+      sel.value = '';
+      const name = prompt('Nome do novo exercício (entra na lista para todos):');
+      if (!name?.trim()) return;
+      saveCatalogItem({ id: uid(), name: name.trim() }).then((item) => {
+        $form.querySelectorAll('#ex-list select[name=ex-name]').forEach((x) => { const v = x === sel ? item.name : x.value; x.innerHTML = exOptions(v); });
+        toast(`"${item.name}" entrou na lista ✅`);
+      }).catch((e) => toast(`⚠️ ${e.message}`));
+    },
     onClick(ev) {
       if (ev.target.name === 'wd') ev.target.parentElement.classList.toggle('on', ev.target.checked);
       const t = ev.target.closest('[data-m]');
       if (!t) return;
       const list = $('#ex-list');
-      if (t.dataset.m === 'add-ex') { list.insertAdjacentHTML('beforeend', exRow()); list.lastElementChild.querySelector('input').focus(); }
+      if (t.dataset.m === 'add-ex') { list.insertAdjacentHTML('beforeend', exRow()); list.lastElementChild.querySelector('select').focus(); }
       if (t.dataset.m === 'rm-ex') t.closest('.ex-item').remove();
-      if (t.dataset.m === 'ex-more') { t.hidden = true; const x = t.nextElementSibling; x.hidden = false; x.querySelector('input').focus(); }
       if (t.dataset.m === 'delete' && confirm(`Excluir "${w.name}"? O histórico será mantido.`)) {
         if (coach) {
           $modal.close();
@@ -2245,6 +2322,8 @@ $view.addEventListener('click', (ev) => {
     case 'tr-mode': coachMode = d.v; store.set('coach-mode', coachMode); coachUsers = null; return render();
     case 'tr-pick': return openPickAthletes(d.v);
     case 'tr-invite': return openCoachInvite();
+    case 'cat-new': return openCatalogItem();
+    case 'cat-edit': return openCatalogItem(catalog().find((c) => c.id === d.id));
     case 'leave-coach': {
       if (!confirm(`Desvincular de ${S.me.coachName}? Os treinos que já estão no app continuam com você.`)) return;
       return api('my-coach', { method: 'DELETE' }).then(() => { toast('Você está sem treinador'); return reload(); }).catch((e) => toast(`⚠️ ${e.message}`));
@@ -2296,6 +2375,13 @@ $view.addEventListener('click', (ev) => {
       return logout().catch(() => {}).finally(() => location.reload());
     default:
   }
+});
+
+// Busca no catálogo de exercícios (filtra sem redesenhar a tela)
+$view.addEventListener('input', (ev) => {
+  if (ev.target.dataset.action !== 'cat-search') return;
+  const q = ev.target.value.trim().toLowerCase();
+  $view.querySelectorAll('.cat-row').forEach((r) => { r.hidden = !!q && !r.dataset.q.includes(q); });
 });
 
 // Ajuste de reps/carga de uma série. Séries seguintes ainda não feitas recebem o mesmo valor.

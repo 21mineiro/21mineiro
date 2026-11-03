@@ -500,15 +500,13 @@ dialog h3 { margin: 0 0 14px; font-size: 20px; }
 .set.done input { opacity: .55; }
 .ex-line { display: flex; align-items: center; gap: 8px; padding: 6px 0; font-size: 14px; border-top: 1px solid var(--line); }
 .ex-line:first-of-type { border-top: 0; }
-.ex-edit { display: grid; grid-template-columns: 1fr 54px 54px 62px 34px; gap: 6px; margin-bottom: 6px; align-items: center; }
+.ex-edit { display: grid; grid-template-columns: 1fr 1fr 1fr 40px; gap: 6px; margin-bottom: 6px; align-items: center; }
 .ex-edit input { padding: 8px 6px; }
 .ex-edit button { padding: 7px 0; }
 .ex-head { font-size: 11px; color: var(--muted); }
-.ex-item { margin-bottom: 10px; }
-.ex-item .ex-edit { margin-bottom: 2px; }
-.ex-more-btn { font-size: 12px; padding: 2px 0; }
-.ex-extra { display: grid; gap: 6px; margin: 4px 0 2px; padding-left: 10px; border-left: 2px solid var(--line); }
-.ex-extra input { padding: 8px; font-size: 14px; }
+.ex-item { margin-bottom: 12px; display: grid; gap: 6px; }
+.ex-item select { width: 100%; padding: 9px 8px; }
+.ex-item .ex-edit, #ex-list + button { margin-bottom: 0; }
 .howto { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin: 2px 0 8px; }
 .howto-btn { font-size: 12px; font-weight: 600; text-decoration: none; padding: 4px 10px; border-radius: 999px; color: var(--link); background: var(--accent-soft); }
 .howto-tip { font-size: 13px; color: var(--muted); }
@@ -791,3 +789,12 @@ body { padding-bottom: calc(112px + env(safe-area-inset-bottom)); }
 .or { display: flex; align-items: center; gap: 10px; max-width: 380px; margin: 18px auto 0; color: var(--muted); font-size: 13px; }
 .or::before, .or::after { content: ''; flex: 1; height: 1px; background: var(--line); }
 a.btn { text-decoration: none; display: inline-block; }
+
+/* Catálogo de exercícios */
+.cat-search { width: 100%; margin-bottom: 10px; }
+.cat-list { padding: 4px 0; }
+.cat-row { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; background: none; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; padding: 12px 16px; color: inherit; font: inherit; }
+.cat-row:last-child { border-bottom: 0; }
+.cat-row b { display: block; font-weight: 600; }
+.cat-row small { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; }
+.cat-row[hidden] { display: none; }
