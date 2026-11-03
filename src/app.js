@@ -734,20 +734,27 @@ function viewCoach() {
 }
 
 // Catálogo: cada exercício com vídeo e dica
+let catFilter = 'todos'; // todos | revisar
 function catalogView() {
-  const list = catalog();
-  const withVideo = list.filter((c) => c.video).length;
+  const all = catalog();
+  const reviewed = all.filter((c) => c.reviewed).length;
+  const list = catFilter === 'revisar' ? all.filter((c) => !c.reviewed) : all;
   return `
-    <p class="muted" style="margin:0 4px 12px">Os treinos só usam exercícios desta lista. Coloque o vídeo e a dica uma vez e todos os alunos veem.</p>
-    <div class="kpis">${tile('Exercícios', list.length)}${tile('Com vídeo', `${withVideo}<small> de ${list.length}</small>`)}</div>
-    <button class="btn-primary btn-block" data-action="cat-new" style="margin-bottom:10px">➕ Novo exercício</button>
+    <p class="muted" style="margin:0 4px 12px">Os treinos só usam exercícios desta lista. Confira o vídeo de cada um e marque como revisado.</p>
+    <div class="kpis">${tile('Exercícios', all.length)}${tile('Revisados', `${reviewed}<small> de ${all.length}</small>`)}</div>
+    <div class="bar" role="img" aria-label="${reviewed} de ${all.length} revisados" style="margin:-4px 0 14px"><i style="width:${all.length ? Math.round((reviewed / all.length) * 100) : 0}%"></i></div>
+    <button class="btn-primary btn-block" data-action="cat-new" style="margin-bottom:10px">Novo exercício</button>
+    <div class="card seg" style="grid-template-columns:1fr 1fr;margin-bottom:10px">
+      <button class="${catFilter === 'todos' ? 'on' : ''}" data-action="cat-filter" data-v="todos">Todos</button>
+      <button class="${catFilter === 'revisar' ? 'on' : ''}" data-action="cat-filter" data-v="revisar">Falta revisar · ${all.length - reviewed}</button>
+    </div>
     <input type="search" class="cat-search" data-action="cat-search" placeholder="Buscar exercício…" aria-label="Buscar exercício">
     <div class="card cat-list">
-      ${list.map((c) => `
+      ${list.length ? list.map((c) => `
         <button class="cat-row" data-action="cat-edit" data-id="${esc(c.id)}" data-q="${esc(c.name.toLowerCase())}">
-          <span class="grow"><b>${esc(c.name)}</b>${c.tip ? `<small>💡 ${esc(c.tip)}</small>` : ''}</span>
-          <span class="chip ${c.video ? 'ok' : ''}">${c.video ? '▶ vídeo' : 'sem vídeo'}</span>
-        </button>`).join('')}
+          <span class="grow"><b>${esc(c.name)}</b>${c.tip ? `<small>${esc(c.tip)}</small>` : ''}</span>
+          <span class="chip ${c.reviewed ? 'ok' : ''}">${c.reviewed ? '✔ revisado' : c.video ? 'revisar' : 'sem vídeo'}</span>
+        </button>`).join('') : '<div class="empty" style="padding:20px">Tudo revisado 🎉</div>'}
     </div>`;
 }
 
@@ -759,7 +766,8 @@ function openCatalogItem(item) {
     <label class="field">Nome<input name="name" required maxlength="80" value="${esc(item.name)}" placeholder="Ex: Agachamento livre"></label>
     <label class="field">Link do vídeo<input name="video" type="url" inputmode="url" value="${esc(item.video || '')}" placeholder="https://youtube.com/…"></label>
     <label class="field">Dica para o aluno<input name="tip" maxlength="240" value="${esc(item.tip || '')}" placeholder="Ex: costas retas, desce devagar"></label>
-    ${item.video ? `<p><a href="${esc(item.video)}" target="_blank" rel="noopener">▶ Testar o vídeo</a></p>` : ''}
+    ${item.video ? `<p><a href="${esc(item.video)}" target="_blank" rel="noopener">▶ Assistir o vídeo</a></p>` : ''}
+    <label class="check-row"><input type="checkbox" name="reviewed" ${item.reviewed ? 'checked' : ''}> Vídeo conferido, está certo</label>
     ${isNew ? '' : '<p class="muted">Se mudar o nome, os treinos que já usam este exercício são atualizados.</p>'}
     <div class="actions">
       ${!isNew ? '<button type="button" class="btn-danger" data-m="delete">Apagar</button>' : ''}
@@ -767,7 +775,7 @@ function openCatalogItem(item) {
       <button class="btn-primary" value="ok">Salvar</button>
     </div>`, {
     onSubmit(f) {
-      saveCatalogItem({ id: item.id, name: f.get('name'), video: f.get('video'), tip: f.get('tip') })
+      saveCatalogItem({ id: item.id, name: f.get('name'), video: f.get('video'), tip: f.get('tip'), reviewed: f.get('reviewed') === 'on' })
         .then(() => { toast('Exercício salvo ✅'); render(); })
         .catch((e) => { toast(`⚠️ ${e.message}`); });
     },
@@ -2323,6 +2331,7 @@ $view.addEventListener('click', (ev) => {
     case 'tr-pick': return openPickAthletes(d.v);
     case 'tr-invite': return openCoachInvite();
     case 'cat-new': return openCatalogItem();
+    case 'cat-filter': catFilter = d.v; return render();
     case 'cat-edit': return openCatalogItem(catalog().find((c) => c.id === d.id));
     case 'leave-coach': {
       if (!confirm(`Desvincular de ${S.me.coachName}? Os treinos que já estão no app continuam com você.`)) return;

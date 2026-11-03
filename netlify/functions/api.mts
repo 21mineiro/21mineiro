@@ -82,7 +82,7 @@ async function getState(me: Me) {
     })),
     workouts: workouts.map((w: any) => ({ id: w.id, name: w.name, weekdays: w.weekdays, exercises: w.exercises })),
     logs: logs.map(logOut),
-    catalog: await sql`SELECT id, name, video, tip FROM exercises ORDER BY lower(name)`,
+    catalog: await sql`SELECT id, name, video, tip, reviewed FROM exercises ORDER BY lower(name)`,
   };
 }
 
@@ -252,10 +252,14 @@ export default async (req: Request, context: Context) => {
       const tip = String(body.tip || '').trim().slice(0, 240) || null;
       const [dup] = await sql`SELECT id FROM exercises WHERE lower(name) = ${name.toLowerCase()} AND id <> ${id}`;
       if (dup) return err('Já existe um exercício com esse nome');
-      const [old] = await sql`SELECT name FROM exercises WHERE id = ${id}`;
+      const [old] = await sql`SELECT name, video FROM exercises WHERE id = ${id}`;
+      // Trocar o vídeo conta como revisado; senão vale o que veio marcado
+      const reviewed = !!video && (body.reviewed === true || (!!old && old.video !== video));
       await sql`
-        INSERT INTO exercises (id, name, video, tip, created_by) VALUES (${id}, ${name}, ${video}, ${tip}, ${me.email})
-        ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, video = EXCLUDED.video, tip = EXCLUDED.tip`;
+        INSERT INTO exercises (id, name, video, tip, created_by, reviewed, reviewed_by)
+        VALUES (${id}, ${name}, ${video}, ${tip}, ${me.email}, ${reviewed}, ${reviewed ? me.email : null})
+        ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, video = EXCLUDED.video, tip = EXCLUDED.tip,
+          reviewed = EXCLUDED.reviewed, reviewed_by = EXCLUDED.reviewed_by`;
       // Renomeou: atualiza os treinos que usam o nome antigo
       if (old && old.name !== name) {
         await sql`
@@ -264,7 +268,7 @@ export default async (req: Request, context: Context) => {
             FROM jsonb_array_elements(exercises) e)
           WHERE exercises @> jsonb_build_array(jsonb_build_object('name', ${old.name}::text))`;
       }
-      return json({ id, name, video, tip });
+      return json({ id, name, video, tip, reviewed });
     }
 
     // Desafios
