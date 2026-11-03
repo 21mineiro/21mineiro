@@ -788,6 +788,7 @@ function coachAthletesList(list) {
       ${tile('Treinos feitos', list.reduce((t, u) => t + u.w7, 0), { delta: 'últimos 7 dias' })}
       ${tile('Cardio', `${fmtNum(list.reduce((t, u) => t + u.cardio7, 0))}<small> min</small>`, { delta: 'últimos 7 dias' })}
     </div>
+    <button class="btn-primary btn-block" data-action="tr-invite" style="margin:4px 0 6px">➕ Adicionar aluno</button>
     <h2>Alunos</h2>
     ${list.length ? list.map((u) => `
       <div class="card athlete" data-action="tr-open" data-id="${u.id}" role="button" tabindex="0">
@@ -1080,6 +1081,13 @@ function viewProfile() {
         ${l.exercises.map((e) => `<div class="muted">${e.sets.every((s) => s.done) ? '✅' : '⬜'} ${esc(e.name)} — ${e.sets.map((s) => (e.unit === 'seg' ? `${s.reps}s` : `${s.reps}×${fmtNum(s.weight)}`)).join(' · ')}${e.unit === 'seg' ? '' : ' kg'}</div>`).join('')}
       </div>`).join('') : '<div class="card empty">Nenhum treino registrado ainda.</div>'}
 
+    ${S.me.coachName ? `
+    <h2>Meu treinador</h2>
+    <div class="card"><div class="row">
+      <div class="grow"><div class="name">🧑‍🏫 ${esc(S.me.coachName)}</div><div class="muted">Vê seus treinos e monta o seu treino</div></div>
+      <button class="btn-small" data-action="leave-coach">Desvincular</button>
+    </div></div>` : ''}
+
     <h2>Conta</h2>
     <div class="card">
       <div class="row" style="flex-wrap:wrap">
@@ -1361,6 +1369,48 @@ function startWorkout(day, w) {
   const log = getOrCreateLog(day, w);
   tab = 'hoje';
   save(saveLog(log));
+}
+
+// Treinador convida aluno por link
+function openCoachInvite() {
+  const link = `${location.origin}/?treinador=${encodeURIComponent(myId())}`;
+  openModal(`
+    <h3>➕ Adicionar aluno</h3>
+    <div class="muted">Mande este link para o aluno. Ele entra (ou cria a conta), aceita, e já aparece na sua lista para você montar o treino.</div>
+    <input readonly value="${esc(link)}" onclick="this.select()" style="margin-top:12px">
+    <div class="actions">
+      <button type="button" data-m="copy">Copiar link</button>
+      ${navigator.share ? '<button type="button" class="btn-primary" data-m="share">Compartilhar</button>' : ''}
+      <button value="cancel">Fechar</button>
+    </div>`, {
+    onClick(ev) {
+      const t = ev.target.closest('[data-m]');
+      if (!t) return;
+      const text = `Sou seu treinador no Desafios & Treinos 💪 Abre o link, entra e aceita para receber seu treino:`;
+      if (t.dataset.m === 'share') navigator.share({ title: 'Desafios & Treinos', text, url: link }).catch(() => {});
+      if (t.dataset.m === 'copy') navigator.clipboard?.writeText(link).then(() => toast('Link copiado!'));
+    },
+  });
+}
+
+async function acceptCoachInvite(coachId) {
+  let c;
+  try { c = await api(`coach-invite/${encodeURIComponent(coachId)}`); } catch (e) { return toast(`⚠️ ${e.message}`); }
+  if (c.current) return toast(`${firstName(c.name)} já é seu treinador ✅`);
+  openModal(`
+    <h3>🧑‍🏫 Novo treinador</h3>
+    <p><b>${esc(c.name)}</b> quer ser seu treinador. Ele vai ver seus treinos e montar o seu treino no app.</p>
+    ${S.me.coachName ? `<p class="muted">Você deixa de ser aluno de ${esc(S.me.coachName)}.</p>` : ''}
+    <div class="actions">
+      <button value="cancel">Agora não</button>
+      <button value="ok" class="btn-primary">Aceitar</button>
+    </div>`, {
+    onSubmit() {
+      api(`coach-invite/${encodeURIComponent(coachId)}`, { method: 'POST' })
+        .then(() => { toast(`Agora ${firstName(c.name)} é seu treinador 💪`, 3000); return reload(); })
+        .catch((e) => toast(`⚠️ ${e.message}`));
+    },
+  });
 }
 
 function inviteLink(c) { return `${location.origin}/?convite=${c.inviteCode}`; }
@@ -2173,6 +2223,11 @@ $view.addEventListener('click', (ev) => {
     case 'tr-apply': return coachApplyProgram();
     case 'tr-mode': coachMode = d.v; store.set('coach-mode', coachMode); coachUsers = null; return render();
     case 'tr-pick': return openPickAthletes(d.v);
+    case 'tr-invite': return openCoachInvite();
+    case 'leave-coach': {
+      if (!confirm(`Desvincular de ${S.me.coachName}? Os treinos que já estão no app continuam com você.`)) return;
+      return api('my-coach', { method: 'DELETE' }).then(() => { toast('Você está sem treinador'); return reload(); }).catch((e) => toast(`⚠️ ${e.message}`));
+    }
     case 'tr-role': {
       const make = d.v === '1';
       const name = firstName(coachUser.user.name);
@@ -2278,6 +2333,8 @@ function showLogin(message = '') {
   $('#title').textContent = '';
   $('#hello').textContent = '';
   $('#today').textContent = '';
+  const coachInv = store.get('pending-coach');
+  if (coachInv) { store.del('pending-coach'); return acceptCoachInvite(coachInv); }
   const invite = store.get('pending-invite');
   $view.innerHTML = `
     <div class="login">
@@ -2404,6 +2461,10 @@ async function offerLocalImport() {
 
 async function start() {
   const params = new URLSearchParams(location.search);
+  if (params.get('treinador')) {
+    store.set('pending-coach', params.get('treinador'));
+    history.replaceState(null, '', location.pathname);
+  }
   if (params.get('convite')) {
     store.set('pending-invite', params.get('convite').toUpperCase());
     history.replaceState(null, '', location.pathname);
@@ -2427,6 +2488,8 @@ async function start() {
     toast(R?.access?.status === 'active' ? 'Assinatura confirmada! 🎉' : 'Recebemos seu pedido. A confirmação pode levar alguns minutos.', 3500);
   }
 
+  const coachInv = store.get('pending-coach');
+  if (coachInv) { store.del('pending-coach'); return acceptCoachInvite(coachInv); }
   const invite = store.get('pending-invite');
   if (invite) { store.del('pending-invite'); openJoin(invite); } else offerLocalImport();
 }

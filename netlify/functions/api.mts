@@ -44,6 +44,9 @@ async function isMember(challengeId: string, userId: string) {
 async function getState(me: Me) {
   const role = await roleOf(me.email);
   const [profile] = await sql`SELECT reminder_hour, timezone, coach_email FROM users WHERE id = ${me.id}`;
+  const coachName = profile?.coach_email
+    ? (await sql`SELECT name FROM users WHERE lower(email) = ${String(profile.coach_email).toLowerCase()} LIMIT 1`)[0]?.name || profile.coach_email
+    : null;
 
   const challenges = await sql`
     SELECT c.*, to_char(c.start_date, 'YYYY-MM-DD') AS start, m.link_workout
@@ -66,7 +69,7 @@ async function getState(me: Me) {
     FROM workout_logs WHERE user_id = ${me.id} ORDER BY day DESC`;
 
   return {
-    me: { ...me, coach: role.coach, owner: role.owner, reminderHour: profile?.reminder_hour ?? null, timezone: profile?.timezone || null, coachEmail: profile?.coach_email || null },
+    me: { ...me, coach: role.coach, owner: role.owner, reminderHour: profile?.reminder_hour ?? null, timezone: profile?.timezone || null, coachEmail: profile?.coach_email || null, coachName },
     challenges: challenges.map((c: any) => ({
       id: c.id, ownerId: c.owner_id, name: c.name, emoji: c.emoji, kind: c.kind,
       target: num(c.target), unit: c.unit, days: c.days, start: c.start,
@@ -204,6 +207,22 @@ export default async (req: Request, context: Context) => {
       const hour = body.reminderHour === null ? null : Math.min(23, Math.max(0, parseInt(body.reminderHour, 10)));
       const tz = typeof body.timezone === 'string' ? body.timezone.slice(0, 60) : 'America/Sao_Paulo';
       await sql`UPDATE users SET reminder_hour = ${Number.isNaN(hour) ? null : hour}, timezone = ${tz} WHERE id = ${me.id}`;
+      return json({ ok: true });
+    }
+
+    // Convite de treinador: o aluno abre o link do treinador e aceita
+    if (res === 'coach-invite' && id) {
+      const [c] = await sql`SELECT id, name, avatar, email FROM users WHERE id = ${id}`;
+      if (!c?.email || !(await roleOf(c.email)).coach) return err('Convite inválido', 404);
+      if (c.id === me.id) return err('Esse é o seu próprio convite');
+      if (method === 'GET') return json({ name: c.name, avatar: c.avatar, current: (await sql`SELECT lower(coach_email) AS ce FROM users WHERE id = ${me.id}`)[0]?.ce === c.email.toLowerCase() });
+      if (method === 'POST') {
+        await sql`UPDATE users SET coach_email = ${c.email.toLowerCase()} WHERE id = ${me.id}`;
+        return json({ ok: true });
+      }
+    }
+    if (res === 'my-coach' && method === 'DELETE') {
+      await sql`UPDATE users SET coach_email = NULL WHERE id = ${me.id}`;
       return json({ ok: true });
     }
 
