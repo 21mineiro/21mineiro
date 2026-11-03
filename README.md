@@ -1,6 +1,6 @@
 # Desafios & Treinos
 
-No ar: https://polite-alfajores-c0ecb9.netlify.app (deploy automático pela Netlify a cada push).
+No ar: https://desafios-treinos.netlify.app (deploy automático pela Netlify a cada push).
 
 App (PWA) para acompanhar desafios com amigos e treinos de academia, feito para usar no celular.
 
