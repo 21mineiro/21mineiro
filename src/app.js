@@ -1807,15 +1807,19 @@ function showLogin(message = '') {
   $view.innerHTML = `
     <div class="login">
       <div class="orbit" aria-hidden="true">
-        <svg viewBox="0 0 150 150">
+        <svg viewBox="0 0 64 64">
           <defs>
             <linearGradient id="lg-sun" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#8b5cf6"/><stop offset=".55" stop-color="#ec4899"/><stop offset="1" stop-color="#f59e0b"/></linearGradient>
-            <radialGradient id="lg-glow" cx=".5" cy=".5" r=".5"><stop offset="0" stop-color="#8b5cf6" stop-opacity=".5"/><stop offset="1" stop-color="#8b5cf6" stop-opacity="0"/></radialGradient>
+            <linearGradient id="lg-fire" x1="0" y1="1" x2="0" y2="0"><stop offset="0" stop-color="#ec4899"/><stop offset=".6" stop-color="#f97316"/><stop offset="1" stop-color="#fbbf24"/></linearGradient>
+            <radialGradient id="lg-glow" cx=".5" cy=".6" r=".5"><stop offset="0" stop-color="#f97316" stop-opacity=".45"/><stop offset="1" stop-color="#f97316" stop-opacity="0"/></radialGradient>
           </defs>
-          <circle cx="75" cy="75" r="72" fill="url(#lg-glow)"/>
-          <g class="spin"><ellipse cx="75" cy="75" rx="66" ry="24" fill="none" stroke="url(#lg-sun)" stroke-width="3" opacity=".7" transform="rotate(-24 75 75)"/><circle cx="135" cy="50" r="6" fill="#f59e0b"/></g>
-          <circle cx="75" cy="75" r="38" fill="none" stroke="url(#lg-sun)" stroke-width="9"/>
-          <path d="M60 76l11 11 21-24" fill="none" stroke="currentColor" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+          <circle cx="32" cy="38" r="25" fill="url(#lg-glow)"/>
+          <g class="swing">
+            <path d="M22 8h8l5 14h-8zM42 8h-8l-5 14h8z" fill="url(#lg-sun)"/>
+            <circle cx="32" cy="39" r="15" fill="url(#lg-fire)"/>
+            <circle cx="32" cy="39" r="10.5" fill="none" stroke="#fff" stroke-width="2" opacity=".55"/>
+            <path d="M26.5 39.5l4 4 7.5-8.5" fill="none" stroke="#fff" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/>
+          </g>
         </svg>
       </div>
       <h2 class="grad-text">Desafios & Treinos</h2>
