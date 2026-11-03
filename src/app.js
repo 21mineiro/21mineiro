@@ -382,6 +382,9 @@ function workoutCard(day, w) {
       </div>
       ${log.finished ? '<span class="chip ok">✓ Concluído</span>' : `<button class="btn-small" data-action="rest-cycle" aria-label="Tempo de descanso entre séries">⏱ ${restDefault()}s</button>`}
     </div>
+    <div class="row" style="justify-content:flex-end;margin-top:6px" ${done || log.finished ? 'hidden' : ''}>
+      <button class="btn-link" data-action="swap-workout" data-w="${w.id}" data-day="${day}">↺ Trocar treino de hoje</button>
+    </div>
     <div class="bar" role="img" aria-label="${done} de ${total} séries"><i style="width:${total ? Math.round((done / total) * 100) : 0}%"></i></div>
     ${log.exercises.map((e, ei) => {
       const allDone = e.sets.length && e.sets.every((s) => s.done);
@@ -408,9 +411,8 @@ function workoutCard(day, w) {
 function todayTasks(today) {
   const items = [];
   for (const c of S.challenges.filter(isActive)) items.push(dayDone(c, myChecks(c)[today]));
-  const scheduled = workoutsForDay(today);
-  const extra = S.workouts.filter((w) => !scheduled.includes(w) && findLog(today, w.id));
-  for (const w of [...scheduled, ...extra]) items.push(!!findLog(today, w.id)?.finished);
+  // Treino: conta como 1 tarefa do dia; feito quando algum treino de hoje foi concluído
+  if (S.workouts.length) items.push(S.workouts.some((w) => findLog(today, w.id)?.finished));
   const run = R?.access?.active && (R.sessions || []).find((s) => s.day === today);
   if (run) items.push(!!run.done);
   return { total: items.length, done: items.filter(Boolean).length };
@@ -440,18 +442,46 @@ function heroToday(today) {
 function viewToday() {
   const today = todayStr();
   const active = S.challenges.filter(isActive);
-  const scheduled = workoutsForDay(today);
-  const extra = S.workouts.filter((w) => !scheduled.includes(w) && findLog(today, w.id));
-  const list = [...scheduled, ...extra];
+  const chosen = S.workouts.filter((w) => findLog(today, w.id));
+  let workoutPart;
+  if (!S.workouts.length) {
+    workoutPart = `<div class="card empty"><div class="big">🏋️</div>Você ainda não escolheu seu treino.<br><br><button class="btn-primary" data-action="go-workouts">Escolher meu treino</button></div>`;
+  } else if (!chosen.length) {
+    workoutPart = pickTodayCard(today);
+  } else {
+    workoutPart = `${chosen.map((w) => workoutCard(today, w)).join('')}
+      <button class="btn-block" data-action="pick-workout" data-day="${today}">+ Fazer outro treino hoje</button>`;
+  }
   return `
     ${heroToday(today)}
     <h2>Desafios de hoje</h2>
     ${active.length ? active.map((c) => challengeToday(c, today)).join('') : `<div class="card empty"><div class="big">🎯</div>Nenhum desafio ativo ainda.<br><br><button class="btn-primary" data-action="new-challenge">+ Criar desafio</button> <button data-action="join">Entrar com código</button></div>`}
     ${runTodayCard(today)}
     <h2>Treino de hoje · ${WEEKDAYS[parseDate(today).getDay()]}</h2>
-    ${list.length ? list.map((w) => workoutCard(today, w)).join('') : `<div class="card empty"><div class="big">${S.workouts.length ? '😴' : '🏋️'}</div>${S.workouts.length ? 'Dia de descanso. Recuperar também é treino.' : 'Você ainda não escolheu seu treino.<br><br><button class="btn-primary" data-action="go-workouts">Escolher meu treino</button>'}</div>`}
-    ${S.workouts.length ? `<button class="btn-block" data-action="pick-workout" data-day="${today}">+ Fazer outro treino hoje</button>` : ''}
+    ${workoutPart}
   `;
+}
+
+// A pessoa escolhe qual treino vai fazer hoje (o do dia da semana aparece como sugerido)
+function pickTodayCard(today) {
+  const wd = parseDate(today).getDay();
+  const lastDay = (w) => S.logs.filter((l) => l.workoutId === w.id && l.finished).map((l) => l.day).sort().pop();
+  const list = [...S.workouts].sort((a, b) => (b.weekdays.includes(wd) ? 1 : 0) - (a.weekdays.includes(wd) ? 1 : 0));
+  return `
+    <div class="card">
+      <div class="name">O que você vai treinar hoje?</div>
+      <div class="muted" style="margin-bottom:10px">Escolha um dos seus treinos.</div>
+      ${list.map((w) => {
+        const last = lastDay(w);
+        return `
+        <button class="pick-today ${w.weekdays.includes(wd) ? 'sug' : ''}" data-action="start-workout" data-id="${w.id}">
+          <span class="grow"><b>${esc(w.name)}</b>
+            <small>${w.exercises.length} exercícios${last ? ` · último: ${fmtDate(last, { day: '2-digit', month: 'short' })}` : ''}</small></span>
+          ${w.weekdays.includes(wd) ? '<span class="chip on">Sugerido hoje</span>' : '<span class="go">›</span>'}
+        </button>`;
+      }).join('')}
+      <div class="muted" style="margin-top:10px;text-align:center">Dia de descanso? Tudo bem, recuperar também é treino. 😴</div>
+    </div>`;
 }
 
 function ranking(c) {
@@ -1881,6 +1911,12 @@ $view.addEventListener('click', (ev) => {
     }
     case 'chart': return openChart(d.name);
     case 'pick-program': return pickProgram(d.v);
+    case 'swap-workout': {
+      // Volta para a escolha do treino de hoje (só antes de marcar alguma série)
+      S.logs = S.logs.filter((l) => !(l.day === d.day && l.workoutId === d.w));
+      stopRest();
+      return save(api(`logs?day=${d.day}&workoutId=${encodeURIComponent(d.w)}`, { method: 'DELETE' }));
+    }
     case 'open-chooser': showChooser = true; enterAnim = true; render(); return window.scrollTo(0, 0);
     case 'close-chooser': showChooser = false; return render();
     case 'go-workouts': tab = 'treinos'; store.set('tab', tab); enterAnim = true; render(); return window.scrollTo(0, 0);
