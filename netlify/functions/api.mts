@@ -3,7 +3,7 @@ import { getUser } from '@netlify/identity';
 import { getDatabase } from '@netlify/database';
 import { getStore } from '@netlify/blobs';
 import { sendPush } from '../lib/push.mts';
-import { handleRun, handleMpWebhook } from '../lib/run-routes.mts';
+import { handleRun, handleMpWebhook, isCoach } from '../lib/run-routes.mts';
 
 const db = getDatabase();
 const sql = db.sql;
@@ -61,11 +61,11 @@ async function getState(me: Me) {
 
   const workouts = await sql`SELECT id, name, weekdays, exercises FROM workouts WHERE user_id = ${me.id} ORDER BY position, created_at`;
   const logs = await sql`
-    SELECT to_char(day, 'YYYY-MM-DD') AS day, workout_id, workout_name, finished, exercises
+    SELECT to_char(day, 'YYYY-MM-DD') AS day, workout_id, workout_name, finished, exercises, cardio
     FROM workout_logs WHERE user_id = ${me.id} ORDER BY day DESC`;
 
   return {
-    me: { ...me, reminderHour: profile?.reminder_hour ?? null, timezone: profile?.timezone || null },
+    me: { ...me, coach: isCoach(me.email), reminderHour: profile?.reminder_hour ?? null, timezone: profile?.timezone || null },
     challenges: challenges.map((c: any) => ({
       id: c.id, ownerId: c.owner_id, name: c.name, emoji: c.emoji, kind: c.kind,
       target: num(c.target), unit: c.unit, days: c.days, start: c.start,
@@ -77,8 +77,28 @@ async function getState(me: Me) {
       }, {}),
     })),
     workouts: workouts.map((w: any) => ({ id: w.id, name: w.name, weekdays: w.weekdays, exercises: w.exercises })),
-    logs: logs.map((l: any) => ({ day: l.day, workoutId: l.workout_id, workoutName: l.workout_name, finished: l.finished, exercises: l.exercises })),
+    logs: logs.map(logOut),
   };
+}
+
+const logOut = (l: any) => ({ day: l.day, workoutId: l.workout_id, workoutName: l.workout_name, finished: l.finished, exercises: l.exercises, cardio: l.cardio || null });
+
+// Cardio: feito ou não, minutos e tipo
+function cardioIn(c: any) {
+  if (!c || typeof c !== 'object') return null;
+  const minutes = Math.min(600, Math.max(0, Math.round(Number(c.minutes) || 0)));
+  if (!c.done && !minutes) return null;
+  return { done: !!c.done, minutes, type: String(c.type || '').slice(0, 30) };
+}
+
+function workoutIn(body: any) {
+  const weekdays = (Array.isArray(body.weekdays) ? body.weekdays : []).map(Number).filter((n: number) => n >= 0 && n <= 6);
+  const exercises = (Array.isArray(body.exercises) ? body.exercises : []).slice(0, 40).map((e: any) => ({
+    id: String(e.id || rid()), name: String(e.name || '').slice(0, 80),
+    sets: Number(e.sets) || 0, reps: Number(e.reps) || 0, weight: Number(e.weight) || 0,
+    ...(e.unit === 'seg' ? { unit: 'seg' } : {}),
+  }));
+  return { name: String(body.name || 'Treino').slice(0, 80), weekdays, exercises, position: Number(body.position) || 0 };
 }
 
 /* ---------- Desafios ---------- */
@@ -263,10 +283,10 @@ export default async (req: Request, context: Context) => {
       const { day, workoutId } = body;
       if (!isDay(day) || !workoutId) return err('Dados inválidos');
       await sql`
-        INSERT INTO workout_logs (user_id, day, workout_id, workout_name, finished, exercises, updated_at)
-        VALUES (${me.id}, ${day}, ${workoutId}, ${String(body.workoutName || '').slice(0, 80)}, ${!!body.finished}, ${JSON.stringify(body.exercises || [])}::jsonb, NOW())
+        INSERT INTO workout_logs (user_id, day, workout_id, workout_name, finished, exercises, cardio, updated_at)
+        VALUES (${me.id}, ${day}, ${workoutId}, ${String(body.workoutName || '').slice(0, 80)}, ${!!body.finished}, ${JSON.stringify(body.exercises || [])}::jsonb, ${JSON.stringify(cardioIn(body.cardio))}::jsonb, NOW())
         ON CONFLICT (user_id, day, workout_id) DO UPDATE
-        SET workout_name = EXCLUDED.workout_name, finished = EXCLUDED.finished, exercises = EXCLUDED.exercises, updated_at = NOW()`;
+        SET workout_name = EXCLUDED.workout_name, finished = EXCLUDED.finished, exercises = EXCLUDED.exercises, cardio = EXCLUDED.cardio, updated_at = NOW()`;
       if (body.syncChallenges) await syncWorkoutChallenges(me.id, day);
       return json({ ok: true });
     }
@@ -276,6 +296,57 @@ export default async (req: Request, context: Context) => {
       await sql`DELETE FROM workout_logs WHERE user_id = ${me.id} AND day = ${day} AND workout_id = ${url.searchParams.get('workoutId') || ''}`;
       await syncWorkoutChallenges(me.id, day!);
       return json({ ok: true });
+    }
+
+    /* ----- Área do treinador ----- */
+    if (res === 'coach') {
+      if (!isCoach(me.email)) return err('Só para o treinador', 403);
+      const [, sub, sid] = parts;
+      const today = isDay(url.searchParams.get('today')) ? url.searchParams.get('today')! : new Date().toISOString().slice(0, 10);
+
+      if (sub === 'users' && method === 'GET') {
+        const rows = await sql`
+          SELECT u.id, u.name, u.email, u.avatar,
+            (SELECT COUNT(*) FROM workout_logs l WHERE l.user_id = u.id AND l.finished AND l.day > ${today}::date - 7) AS w7,
+            (SELECT COUNT(*) FROM workout_logs l WHERE l.user_id = u.id AND l.finished AND l.day > ${today}::date - 30) AS w30,
+            (SELECT COALESCE(SUM((l.cardio->>'minutes')::int), 0) FROM workout_logs l WHERE l.user_id = u.id AND l.cardio IS NOT NULL AND l.day > ${today}::date - 7) AS cardio7,
+            (SELECT to_char(MAX(l.day), 'YYYY-MM-DD') FROM workout_logs l WHERE l.user_id = u.id AND l.finished) AS last_day,
+            (SELECT l.workout_name FROM workout_logs l WHERE l.user_id = u.id AND l.finished ORDER BY l.day DESC LIMIT 1) AS last_name,
+            (SELECT string_agg(DISTINCT split_part(w.id, '-', 1) || '-' || split_part(w.id, '-', 2), ',') FROM workouts w WHERE w.user_id = u.id) AS kinds,
+            (SELECT COUNT(*) FROM workouts w WHERE w.user_id = u.id) AS nworkouts
+          FROM users u ORDER BY last_day DESC NULLS LAST, u.name`;
+        return json(rows.map((r: any) => ({
+          id: r.id, name: r.name, email: r.email, avatar: r.avatar, w7: Number(r.w7), w30: Number(r.w30), cardio7: Number(r.cardio7),
+          lastDay: r.last_day, lastName: r.last_name, kinds: r.kinds || '', nworkouts: Number(r.nworkouts),
+        })));
+      }
+      if (sub === 'user' && sid && method === 'GET') {
+        const [u] = await sql`SELECT id, name, email, avatar FROM users WHERE id = ${sid}`;
+        if (!u) return err('Aluno não encontrado', 404);
+        const workouts = await sql`SELECT id, name, weekdays, exercises FROM workouts WHERE user_id = ${sid} ORDER BY position, created_at`;
+        const logs = await sql`
+          SELECT to_char(day, 'YYYY-MM-DD') AS day, workout_id, workout_name, finished, exercises, cardio
+          FROM workout_logs WHERE user_id = ${sid} AND day > ${today}::date - 90 ORDER BY day DESC`;
+        return json({ user: u, workouts: workouts.map((w: any) => ({ id: w.id, name: w.name, weekdays: w.weekdays, exercises: w.exercises })), logs: logs.map(logOut) });
+      }
+      // Treinos montados pelo treinador para um aluno (id começa com "co-")
+      if (sub === 'workouts' && sid && method === 'PUT') {
+        if (!sid.startsWith('co-') || !body.athleteId) return err('Dados inválidos');
+        const w = workoutIn(body);
+        const [owner] = await sql`SELECT user_id FROM workouts WHERE id = ${sid}`;
+        if (owner && owner.user_id !== body.athleteId) return err('Sem acesso', 403);
+        await sql`
+          INSERT INTO workouts (id, user_id, name, weekdays, exercises, position)
+          VALUES (${sid}, ${body.athleteId}, ${w.name}, ${JSON.stringify(w.weekdays)}::jsonb, ${JSON.stringify(w.exercises)}::jsonb, ${w.position})
+          ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, weekdays = EXCLUDED.weekdays, exercises = EXCLUDED.exercises, position = EXCLUDED.position`;
+        return json({ ok: true });
+      }
+      // Apagar treinos de um aluno (para trocar pelo treino do treinador)
+      if (sub === 'workouts' && sid && method === 'DELETE') {
+        await sql`DELETE FROM workouts WHERE id = ${sid}`;
+        return json({ ok: true });
+      }
+      return err('Rota não encontrada', 404);
     }
 
     // Importar dados da versão antiga (salvos só no celular)

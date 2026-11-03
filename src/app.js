@@ -289,19 +289,23 @@ const tile = (label, value, { delta = '', spark = '', up = false } = {}) => `
 /* ================= Renderização ================= */
 
 const $view = $('#view');
-const TITLES = { hoje: 'Hoje', desafios: 'Desafios', treinos: 'Treinos', corrida: 'Corrida', perfil: 'Perfil' };
+const TITLES = { hoje: 'Hoje', desafios: 'Desafios', treinos: 'Treinos', corrida: 'Corrida', perfil: 'Perfil', alunos: 'Alunos' };
 let enterAnim = true;   // animação de entrada ao abrir uma aba
 let popSel = null;      // botão que acabou de ser marcado (efeito "pop")
 
 function render() {
   if (!S) return;
   document.body.classList.remove('logged-out');
+  // Aba "Alunos" só para o treinador
+  if (tab === 'alunos' && !S.me.coach) tab = 'hoje';
+  $('.tabs [data-tab=alunos]').hidden = !S.me.coach;
+  $('.tabs').classList.toggle('five', !!S.me.coach);
   document.querySelectorAll('.tabs button').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
   $('#hello').textContent = tab === 'hoje' ? greeting(S.me.name) : '';
   $('#title').textContent = TITLES[tab];
   const dt = fmtDate(todayStr(), { weekday: 'short', day: '2-digit', month: 'short' }).replace(/\./g, '');
   $('#today').textContent = dt.charAt(0).toUpperCase() + dt.slice(1);
-  $view.innerHTML = ({ hoje: viewToday, desafios: viewChallenges, treinos: viewWorkouts, corrida: viewRun, perfil: viewProfile }[tab] || viewToday)();
+  $view.innerHTML = ({ hoje: viewToday, desafios: viewChallenges, treinos: viewWorkouts, corrida: viewRun, perfil: viewProfile, alunos: viewCoach }[tab] || viewToday)();
   if (enterAnim) { enterAnim = false; $view.classList.add('enter'); setTimeout(() => $view.classList.remove('enter'), 900); }
   if (popSel) { $view.querySelector(popSel)?.classList.add('pop'); popSel = null; }
   checkNewBadges();
@@ -401,6 +405,7 @@ function workoutCard(day, w) {
         ${e.sets.map((s, si) => setRow(day, w, ei, si, s, e.unit || w.exercises.find((x) => x.id === e.exId)?.unit)).join('')}
       </div>`;
     }).join('')}
+    ${cardioBlock(day, w, log)}
     <button class="btn-block ${log.finished ? '' : 'btn-primary'}" style="margin-top:14px" data-action="finish" data-w="${w.id}" data-day="${day}">
       ${log.finished ? 'Desmarcar treino' : 'Concluir treino 💪'}
     </button>
@@ -710,6 +715,165 @@ async function pickProgram(key) {
   } catch (e) { toast(`⚠️ ${e.message}`); await reload(); }
 }
 
+/* ================= Cardio do treino ================= */
+
+const CARDIO_TYPES = ['Esteira', 'Bicicleta', 'Elíptico', 'Escada', 'Corrida na rua', 'Pular corda', 'Outro'];
+
+function cardioBlock(day, w, log) {
+  const c = log.cardio || {};
+  const a = `data-w="${w.id}" data-day="${day}"`;
+  return `
+    <div class="cardio ${c.done ? 'done' : ''}">
+      <div class="row">
+        <span class="c-ico" aria-hidden="true">🫀</span>
+        <div class="grow"><b>Cardio</b><small class="muted">${c.done ? `${c.minutes || 0} min${c.type ? ` · ${esc(c.type)}` : ''}` : 'Fez cardio hoje? Marque e coloque o tempo.'}</small></div>
+        <button class="check sm ${c.done ? 'on' : ''}" data-action="cardio-done" ${a} data-pop="cd-${w.id}" aria-label="Cardio feito" aria-pressed="${!!c.done}">✓</button>
+      </div>
+      <div class="row cardio-fields">
+        <label class="field grow">Minutos
+          <input type="number" inputmode="numeric" min="0" max="600" value="${c.minutes || ''}" placeholder="20" data-action="cardio-field" data-field="minutes" ${a}>
+        </label>
+        <label class="field grow">Tipo
+          <select data-action="cardio-field" data-field="type" ${a}><option value="">Escolha</option>${CARDIO_TYPES.map((t) => `<option ${c.type === t ? 'selected' : ''}>${t}</option>`).join('')}</select>
+        </label>
+      </div>
+    </div>`;
+}
+
+const cardioMin = (logs, from) => logs.filter((l) => l.cardio?.done && (!from || l.day >= from)).reduce((t, l) => t + (Number(l.cardio.minutes) || 0), 0);
+
+/* ================= Área do treinador ================= */
+
+let coachUsers = null, coachUser = null;
+const firstName = (n) => String(n || '').split(' ')[0];
+const ago = (d) => { const n = diffDays(d, todayStr()); return n <= 0 ? 'hoje' : n === 1 ? 'ontem' : `há ${n} dias`; };
+const planLabel = (kinds, n) => (kinds.includes('co-') ? '🧑‍🏫 Treino do treinador' : kinds.includes('pg-completo') ? '🏋️ Treino Completo'
+  : kinds.includes('pg-corrida') ? '🏃 Fortalecimento p/ corrida' : n ? '✍️ Treino próprio' : 'Ainda sem treino');
+
+async function loadCoachUsers() {
+  try { coachUsers = await api(`coach/users?today=${todayStr()}`); } catch (e) { coachUsers = []; toast(`⚠️ ${e.message}`); }
+  render();
+}
+async function openCoachUser(id) {
+  try { coachUser = await api(`coach/user/${id}?today=${todayStr()}`); render(); window.scrollTo(0, 0); } catch (e) { toast(`⚠️ ${e.message}`); }
+}
+
+function viewCoach() {
+  if (coachUser) return coachUserView();
+  if (!coachUsers) { loadCoachUsers(); return '<div class="empty">Carregando alunos…</div>'; }
+  const list = coachUsers.filter((u) => u.id !== myId());
+  const active7 = list.filter((u) => u.w7 > 0).length;
+  return `
+    <div class="kpis">
+      ${tile('Alunos', list.length)}
+      ${tile('Treinaram', `${active7}<small> de ${list.length}</small>`, { delta: 'últimos 7 dias' })}
+      ${tile('Treinos feitos', list.reduce((t, u) => t + u.w7, 0), { delta: 'últimos 7 dias' })}
+      ${tile('Cardio', `${fmtNum(list.reduce((t, u) => t + u.cardio7, 0))}<small> min</small>`, { delta: 'últimos 7 dias' })}
+    </div>
+    <h2>Alunos</h2>
+    ${list.length ? list.map((u) => `
+      <div class="card athlete" data-action="tr-open" data-id="${u.id}" role="button" tabindex="0">
+        <div class="row">
+          ${avatar(u, 42)}
+          <div class="grow"><div class="name">${esc(u.name)}</div><div class="muted">${planLabel(u.kinds, u.nworkouts)}</div></div>
+          <span class="go-arrow">›</span>
+        </div>
+        <div class="chips" style="margin-top:10px">
+          <span class="chip ${u.w7 ? 'ok' : ''}">${u.w7} ${u.w7 === 1 ? 'treino' : 'treinos'} · 7 dias</span>
+          <span class="chip">${u.w30} · 30 dias</span>
+          ${u.cardio7 ? `<span class="chip">🫀 ${u.cardio7} min cardio</span>` : ''}
+        </div>
+        <div class="muted" style="margin-top:8px">${u.lastDay ? `Último: ${esc(u.lastName || 'treino')} · ${ago(u.lastDay)}` : 'Ainda não registrou treino'}</div>
+      </div>`).join('') : '<div class="card empty"><div class="big">🧑‍🏫</div>Quando seus alunos entrarem no app, eles aparecem aqui.</div>'}`;
+}
+
+function coachUserView() {
+  const x = coachUser;
+  const today = todayStr();
+  const done = x.logs.filter((l) => l.finished);
+  const from30 = addDays(today, -29);
+  const hasCoach = x.workouts.some((w) => w.id.startsWith('co-'));
+  const kinds = x.workouts.map((w) => w.id).join(',');
+  return `
+    <button class="back" data-action="tr-back">← Alunos</button>
+    <div class="card row">${avatar(x.user, 48)}<div class="grow"><div class="name">${esc(x.user.name)}</div><div class="muted">${esc(x.user.email)}</div></div></div>
+    <div class="kpis">
+      ${tile('Treinos', done.filter((l) => l.day >= from30).length, { delta: 'últimos 30 dias' })}
+      ${tile('Cardio', `${fmtNum(cardioMin(x.logs, from30))}<small> min</small>`, { delta: 'últimos 30 dias' })}
+      ${tile('Último treino', done[0] ? ago(done[0].day) : '—', { delta: done[0] ? esc(done[0].workoutName) : 'nenhum ainda' })}
+      ${tile('Treino atual', `<small>${planLabel(kinds, x.workouts.length)}</small>`)}
+    </div>
+
+    <h2>Treino de ${esc(firstName(x.user.name))}</h2>
+    ${x.workouts.length ? x.workouts.map((w) => `
+      <div class="card">
+        <div class="row">
+          <div class="grow"><div class="name">${esc(w.name)}</div><div class="muted">${w.weekdays.map((d) => WEEKDAYS[d]).join(', ') || 'Sem dia fixo'} · ${w.exercises.length} exercícios</div></div>
+          ${w.id.startsWith('co-') ? `<button class="btn-small" data-action="tr-edit" data-id="${w.id}">Editar</button>` : ''}
+        </div>
+        <div class="muted prog-ex" style="margin-top:8px">${w.exercises.map((e) => `${esc(e.name)} ${fmtEx(e)}`).join(' · ')}</div>
+      </div>`).join('') : '<div class="card empty">Ainda não tem treino.</div>'}
+    <div class="row" style="margin-bottom:6px">
+      <button class="btn-primary grow" data-action="tr-new">+ Montar treino</button>
+      <button class="grow" data-action="tr-apply">📋 Usar programa pronto</button>
+    </div>
+    ${!hasCoach && x.workouts.length ? `<p class="muted" style="text-align:center">Os treinos acima foram escolhidos por ${esc(firstName(x.user.name))}. Ao montar um treino para ela, eles são substituídos.</p>` : ''}
+
+    <h2>O que treinou · 90 dias</h2>
+    ${x.logs.length ? x.logs.slice(0, 40).map((l) => `
+      <div class="card">
+        <div class="row between">
+          <div class="name">${esc(l.workoutName)}</div>
+          <span class="chip ${l.finished ? 'ok' : ''}">${l.finished ? '✓ Concluído' : 'parcial'}</span>
+        </div>
+        <div class="muted" style="margin-bottom:6px">${fmtDate(l.day, { weekday: 'short', day: '2-digit', month: 'short' })}${l.cardio?.done ? ` · 🫀 ${l.cardio.minutes} min${l.cardio.type ? ` de ${esc(l.cardio.type.toLowerCase())}` : ''}` : ''}</div>
+        ${l.exercises.map((e) => `<div class="muted">${e.sets.every((s) => s.done) ? '✅' : '⬜'} ${esc(e.name)} — ${e.sets.map((s) => (e.unit === 'seg' ? `${s.reps}s` : `${s.reps}×${fmtNum(s.weight)}`)).join(' · ')}${e.unit === 'seg' ? '' : ' kg'}</div>`).join('')}
+      </div>`).join('') : '<div class="card empty">Nenhum treino registrado ainda.</div>'}`;
+}
+
+const coachCtx = () => ({ athleteId: coachUser.user.id, name: firstName(coachUser.user.name), list: coachUser.workouts, done: () => openCoachUser(coachUser.user.id) });
+
+// Antes do primeiro treino do treinador, tira os treinos que a pessoa tinha escolhido
+async function clearAthleteWorkouts(onlyOwn) {
+  const drop = coachUser.workouts.filter((w) => !onlyOwn || !w.id.startsWith('co-'));
+  for (const w of drop) await api(`coach/workouts/${w.id}`, { method: 'DELETE' });
+  coachUser.workouts = coachUser.workouts.filter((w) => !drop.includes(w));
+}
+
+async function coachNewWorkout() {
+  const own = coachUser.workouts.filter((w) => !w.id.startsWith('co-'));
+  if (own.length) {
+    if (!confirm(`${firstName(coachUser.user.name)} já tem treinos escolhidos por ela. Substituir pelo seu treino?`)) return;
+    try { await clearAthleteWorkouts(true); } catch (e) { return toast(`⚠️ ${e.message}`); }
+    render();
+  }
+  openWorkoutForm(null, coachCtx());
+}
+
+function coachApplyProgram() {
+  openModal(`
+    <h3>Usar programa pronto</h3>
+    <p class="muted" style="margin-top:-6px">Os treinos atuais de ${esc(firstName(coachUser.user.name))} serão substituídos. Depois você pode editar cada treino.</p>
+    ${Object.entries(PROGRAMS).map(([k, p]) => `<button type="button" class="pick-today" data-m="apply" data-v="${k}"><span class="grow"><b>${p.icon} ${p.name}</b><small>${p.days}</small></span><span class="go">›</span></button>`).join('')}
+    <div class="actions"><button value="cancel">Cancelar</button></div>`, {
+    async onClick(ev) {
+      const t = ev.target.closest('[data-m=apply]');
+      if (!t) return;
+      $modal.close();
+      const p = PROGRAMS[t.dataset.v];
+      try {
+        await clearAthleteWorkouts(false);
+        for (const [i, w] of p.workouts.entries()) {
+          await api(`coach/workouts/co-${t.dataset.v}-${w.letter}-${uid().slice(0, 8)}`, { method: 'PUT', body: {
+            athleteId: coachUser.user.id, name: w.name, weekdays: w.weekdays, position: i, exercises: w.exercises.map((e) => ({ id: uid(), ...e })) } });
+        }
+        toast(`${p.icon} ${p.name} aplicado para ${firstName(coachUser.user.name)}`);
+        openCoachUser(coachUser.user.id);
+      } catch (e) { toast(`⚠️ ${e.message}`); }
+    },
+  });
+}
+
 function viewWorkouts() {
   const today = todayStr();
   const finished = S.logs.filter((l) => l.finished);
@@ -720,18 +884,19 @@ function viewWorkouts() {
   const lastDone = (w) => finished.filter((l) => l.workoutId === w.id).map((l) => l.day).sort().pop();
   if (showChooser || !S.workouts.length) return programChooser();
   const prog = currentProgram();
+  const fromCoach = S.workouts.some((w) => w.id.startsWith('co-'));
   return `
     <div class="card row prog-head">
-      <div class="grow"><div class="muted">Seu treino</div><div class="name">${prog ? `${PROGRAMS[prog].icon} ${PROGRAMS[prog].name}` : '✍️ Meu treino'}</div></div>
-      <button class="btn-small" data-action="open-chooser">Trocar</button>
+      <div class="grow"><div class="muted">Seu treino</div><div class="name">${fromCoach ? '🧑‍🏫 Montado pelo seu treinador' : prog ? `${PROGRAMS[prog].icon} ${PROGRAMS[prog].name}` : '✍️ Meu treino'}</div></div>
+      ${fromCoach ? '' : '<button class="btn-small" data-action="open-chooser">Trocar</button>'}
     </div>
     ${finished.length ? `<div class="kpis">
       ${tile('Nesta semana', perWeek[perWeek.length - 1].value, { delta: 'treinos concluídos', spark: sparkline(perWeek.map((w) => w.value), 'Treinos por semana, últimas 8 semanas') })}
       ${tile('Últimos 30 dias', last30, { delta: 'treinos' })}
       ${tile('Volume na semana', `${fmtNum(Math.round(volume))}<small> kg</small>`, { delta: 'séries × reps × carga' })}
-      ${tile('No total', finished.length, { delta: 'treinos concluídos' })}
+      ${tile('Cardio na semana', `${fmtNum(cardioMin(S.logs, weekStart))}<small> min</small>`, { delta: 'junto com os treinos' })}
     </div>` : ''}
-    ${prog ? '' : '<button class="btn-primary btn-block" data-action="new-workout" style="margin-bottom:14px">+ Novo treino</button>'}
+    ${prog || fromCoach ? '' : '<button class="btn-primary btn-block" data-action="new-workout" style="margin-bottom:14px">+ Novo treino</button>'}
     ${S.workouts.length ? S.workouts.map((w) => {
       const last = lastDone(w);
       return `
@@ -739,7 +904,7 @@ function viewWorkouts() {
         <div class="row">
           <div class="wk-ico" aria-hidden="true">🏋️</div>
           <div class="grow"><div class="name">${esc(w.name)}</div><div class="muted">${last ? `Último: ${fmtDate(last, { weekday: 'short', day: '2-digit', month: 'short' })}` : 'Ainda não feito'}</div></div>
-          <button class="btn-small" data-action="edit-workout" data-id="${w.id}">Editar</button>
+          ${w.id.startsWith('co-') ? '' : `<button class="btn-small" data-action="edit-workout" data-id="${w.id}">Editar</button>`}
         </div>
         <div class="chips" style="margin:12px 0 6px">
           ${WEEKDAYS.map((d, i) => `<span class="chip ${w.weekdays.includes(i) ? 'on' : ''}">${d}</span>`).join('')}
@@ -868,8 +1033,8 @@ function viewProfile() {
           <div class="name">${esc(l.workoutName)}</div>
           <span class="chip ${l.finished ? 'ok' : ''}">${l.finished ? '✓ Concluído' : 'parcial'}</span>
         </div>
-        <div class="muted" style="margin-bottom:6px">${fmtDate(l.day, { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' })}</div>
-        ${l.exercises.map((e) => `<div class="muted">${e.sets.every((s) => s.done) ? '✅' : '⬜'} ${esc(e.name)} — ${e.sets.map((s) => `${s.reps}×${fmtNum(s.weight)}`).join(' · ')} kg</div>`).join('')}
+        <div class="muted" style="margin-bottom:6px">${fmtDate(l.day, { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' })}${l.cardio?.done ? ` · 🫀 ${l.cardio.minutes} min de cardio` : ''}</div>
+        ${l.exercises.map((e) => `<div class="muted">${e.sets.every((s) => s.done) ? '✅' : '⬜'} ${esc(e.name)} — ${e.sets.map((s) => (e.unit === 'seg' ? `${s.reps}s` : `${s.reps}×${fmtNum(s.weight)}`)).join(' · ')}${e.unit === 'seg' ? '' : ' kg'}</div>`).join('')}
       </div>`).join('') : '<div class="card empty">Nenhum treino registrado ainda.</div>'}
   `;
 }
@@ -1057,9 +1222,10 @@ function removeCheck(c, day) {
   save(api(`checkins?challengeId=${encodeURIComponent(c.id)}&day=${day}`, { method: 'DELETE' }));
 }
 
-function openWorkoutForm(w) {
+// coach: { athleteId, list, done } quando o treinador monta o treino de um aluno
+function openWorkoutForm(w, coach = null) {
   const isNew = !w;
-  w = w || { id: uid(), name: '', weekdays: [], exercises: [] };
+  w = w || { id: coach ? `co-${uid().slice(0, 13)}` : uid(), name: '', weekdays: [], exercises: [] };
   const exRow = (e = {}) => `
     <div class="ex-edit" data-exid="${e.id || ''}" data-unit="${e.unit || ''}">
       <input name="ex-name" placeholder="Exercício" value="${esc(e.name || '')}">
@@ -1069,7 +1235,7 @@ function openWorkoutForm(w) {
       <button type="button" data-m="rm-ex" aria-label="Remover">✕</button>
     </div>`;
   openModal(`
-    <h3>${isNew ? 'Novo treino' : 'Editar treino'}</h3>
+    <h3>${isNew ? 'Novo treino' : 'Editar treino'}${coach ? ` <small class="muted">· para ${esc(coach.name)}</small>` : ''}</h3>
     <label class="field">Nome<input name="name" required value="${esc(w.name)}" placeholder="Ex: Treino A – Peito"></label>
     <div class="field">Dias da semana
       <div class="chips">${WEEKDAYS.map((d, i) => `<label class="chip ${w.weekdays.includes(i) ? 'on' : ''}"><input type="checkbox" name="wd" value="${i}" ${w.weekdays.includes(i) ? 'checked' : ''} hidden>${d}</label>`).join('')}</div>
@@ -1094,6 +1260,12 @@ function openWorkoutForm(w) {
         ...(row.dataset.unit ? { unit: row.dataset.unit } : {}),
       })).filter((e) => e.name);
       Object.assign(w, { name: f.get('name').trim(), weekdays: f.getAll('wd').map(Number), exercises });
+      if (coach) {
+        if (isNew) coach.list.push(w);
+        api(`coach/workouts/${w.id}`, { method: 'PUT', body: { ...w, athleteId: coach.athleteId, position: coach.list.indexOf(w) } })
+          .then(() => { toast('Treino salvo para o aluno ✅'); coach.done(); }).catch((e) => toast(`⚠️ ${e.message}`));
+        return;
+      }
       if (isNew) S.workouts.push(w);
       save(api(`workouts/${w.id}`, { method: 'PUT', body: { ...w, position: S.workouts.indexOf(w) } }));
     },
@@ -1105,6 +1277,11 @@ function openWorkoutForm(w) {
       if (t.dataset.m === 'add-ex') { list.insertAdjacentHTML('beforeend', exRow()); list.lastElementChild.querySelector('input').focus(); }
       if (t.dataset.m === 'rm-ex') t.parentElement.remove();
       if (t.dataset.m === 'delete' && confirm(`Excluir "${w.name}"? O histórico será mantido.`)) {
+        if (coach) {
+          $modal.close();
+          api(`coach/workouts/${w.id}`, { method: 'DELETE' }).then(coach.done).catch((e) => toast(`⚠️ ${e.message}`));
+          return;
+        }
         S.workouts = S.workouts.filter((x) => x.id !== w.id);
         $modal.close();
         save(api(`workouts/${w.id}`, { method: 'DELETE' }));
@@ -1728,7 +1905,7 @@ function openCoachSession(s, athleteId) {
   const isNew = !s;
   s = s || { day: todayStr(), type: 'leve', title: '', description: '', distanceKm: '', pace: '', coachNote: '' };
   openModal(`
-    <h3>${isNew ? 'Novo treino' : 'Editar treino'}</h3>
+    <h3>${isNew ? 'Novo treino' : 'Editar treino'}${coach ? ` <small class="muted">· para ${esc(coach.name)}</small>` : ''}</h3>
     ${!isNew && s.done ? `<div class="note">✅ Feito: ${s.actualKm ? `${fmtNum(s.actualKm)} km` : ''} ${s.actualTime ? `em ${esc(s.actualTime)}` : ''} ${s.rpe ? `· esforço ${s.rpe}/10` : ''}${s.feedback ? `\n“${esc(s.feedback)}”` : ''}</div>` : ''}
     <div class="row">
       <label class="field grow">Data<input name="day" type="date" value="${s.day}" required></label>
@@ -1855,6 +2032,7 @@ document.querySelector('.tabs').addEventListener('click', (ev) => {
   const b = ev.target.closest('button[data-tab]');
   if (!b) return;
   tab = b.dataset.tab; store.set('tab', tab); enterAnim = true;
+  if (tab === 'alunos') { coachUser = null; coachUsers = null; }
   document.querySelectorAll('.tabs button').forEach((x) => x.classList.toggle('active', x === b));
   render(); window.scrollTo(0, 0);
 });
@@ -1911,6 +2089,19 @@ $view.addEventListener('click', (ev) => {
     }
     case 'chart': return openChart(d.name);
     case 'pick-program': return pickProgram(d.v);
+    case 'cardio-done': {
+      const log = getOrCreateLog(d.day, w);
+      const c = log.cardio || { minutes: 0, type: '' };
+      c.done = !c.done;
+      if (c.done) { haptic(12); popSel = `[data-pop="cd-${w.id}"]`; if (!c.minutes) c.minutes = 20; }
+      log.cardio = c;
+      return save(saveLog(log));
+    }
+    case 'tr-open': return openCoachUser(d.id);
+    case 'tr-back': coachUser = null; coachUsers = null; return render();
+    case 'tr-new': return coachNewWorkout();
+    case 'tr-edit': return openWorkoutForm(coachUser.workouts.find((x) => x.id === d.id), coachCtx());
+    case 'tr-apply': return coachApplyProgram();
     case 'swap-workout': {
       // Volta para a escolha do treino de hoje (só antes de marcar alguma série)
       S.logs = S.logs.filter((l) => !(l.day === d.day && l.workoutId === d.w));
@@ -1954,6 +2145,15 @@ $view.addEventListener('change', (ev) => {
   if (t.dataset.action === 'reminder-hour') {
     const hour = t.value === '' ? null : Number(t.value);
     setReminder(hour).then(() => toast(hour === null ? 'Lembrete desligado' : `Lembrete às ${String(hour).padStart(2, '0')}:00`)).catch((e) => toast(`⚠️ ${e.message}`));
+    return;
+  }
+  if (t.dataset.action === 'cardio-field') {
+    const log = getOrCreateLog(t.dataset.day, byId(S.workouts, t.dataset.w));
+    const c = log.cardio || { done: false, minutes: 0, type: '' };
+    if (t.dataset.field === 'minutes') { c.minutes = Math.max(0, Math.round(Number(t.value) || 0)); if (c.minutes) c.done = true; }
+    else c.type = t.value;
+    log.cardio = c;
+    save(saveLog(log));
     return;
   }
   if (t.dataset.action !== 'set-field') return;

@@ -751,3 +751,20 @@ body.logged-out main { padding-top: calc(16px + env(safe-area-inset-top)); }
 .pick-today small { display: block; color: var(--muted); font-weight: 500; margin-top: 2px; }
 .pick-today.sug { border-color: var(--accent); background: var(--accent-soft); }
 .pick-today .go { font-size: 24px; color: var(--muted); }
+
+/* Barra com 5 abas (treinador) */
+.tabs.five { grid-template-columns: repeat(5, 1fr); }
+.tabs { bottom: calc(18px + env(safe-area-inset-bottom)); }
+body { padding-bottom: calc(112px + env(safe-area-inset-bottom)); }
+
+/* Cardio no treino */
+.cardio { margin-top: 14px; padding: 12px; border-radius: 16px; background: var(--surface-2); border: 1px solid var(--line); }
+.cardio.done { border-color: var(--good); background: var(--good-soft); }
+.cardio b { display: block; }
+.cardio small { display: block; }
+.cardio .c-ico { font-size: 24px; }
+.cardio-fields { margin-top: 10px; align-items: flex-start; }
+.cardio-fields .field { margin-bottom: 0; }
+
+/* Área do treinador */
+.go-arrow { font-size: 26px; color: var(--muted); }
