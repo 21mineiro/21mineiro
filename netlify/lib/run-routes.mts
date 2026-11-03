@@ -337,8 +337,9 @@ export async function handleRun(req: Request, url: URL, parts: string[], me: Me,
     if (c === 'athletes' && method === 'GET') {
       const rows = await sql`
         SELECT u.id, u.name, u.email, u.avatar, s.plan, s.status, s.trial_ends_at, p.goal, to_char(p.race_date, 'YYYY-MM-DD') AS race_date,
-          (SELECT COUNT(*) FROM run_sessions r WHERE r.user_id = u.id AND r.day < ${today}::date AND r.day >= ${today}::date - 28) AS past,
-          (SELECT COUNT(*) FROM run_sessions r WHERE r.user_id = u.id AND r.done AND r.day >= ${today}::date - 28) AS done,
+          (SELECT COUNT(*) FROM run_sessions r WHERE r.user_id = u.id AND r.day >= ${today}::date - 28
+             AND (r.day < ${today}::date OR (r.day = ${today}::date AND r.done))) AS past,
+          (SELECT COUNT(*) FROM run_sessions r WHERE r.user_id = u.id AND r.done AND r.day <= ${today}::date AND r.day >= ${today}::date - 28) AS done,
           (SELECT COUNT(*) FROM run_messages m WHERE m.athlete_id = u.id AND m.author_id = u.id AND m.read_at IS NULL) AS unread,
           (SELECT MAX(updated_at) FROM run_sessions r WHERE r.user_id = u.id AND r.done) AS last_run
         FROM users u

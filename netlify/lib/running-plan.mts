@@ -172,8 +172,9 @@ export function generatePlan(p: Profile): { weeks: number; sessions: Session[]; 
     const qKm = isInterval ? r1(iv.km + 4) : r1(tempoKm + 4);
     const easyKm = r1(Math.max(3, (vol - longKm - qKm) / Math.max(1, easyDays.length)));
 
-    for (const d of days) {
-      if (isLast && d > raceDay) continue; // nada depois da prova
+    // Na última semana, a prova entra mesmo se cair num dia sem treino; nada depois dela
+    const weekDays = isLast ? [...new Set([...days.filter((d) => d < raceDay), raceDay])].sort((a, b) => a - b) : days;
+    for (const d of weekDays) {
       const day = p.raceDate && isLast && d === raceDay ? p.raceDate : addDays(p.startDate, w * 7 + d);
       let s: Omit<Session, 'day' | 'week' | 'phase'>;
 

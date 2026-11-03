@@ -1,6 +1,6 @@
 // Cache para o app abrir sem internet + notificações
-const CACHE = 'desafios-v2';
-const FILES = ['/', '/index.html', '/styles.css', '/app.js', '/manifest.json', '/icon.svg'];
+const CACHE = 'desafios-v3';
+const FILES = ['/', '/index.html', '/styles.css', '/app.js', '/manifest.json', '/icon.svg', '/icon-192.png', '/fonts/space-grotesk.woff2'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(FILES)));
@@ -27,7 +27,7 @@ self.addEventListener('push', (e) => {
   let data = {};
   try { data = e.data.json(); } catch { data = { title: 'Desafios', body: e.data?.text() || '' }; }
   e.waitUntil(self.registration.showNotification(data.title || 'Desafios', {
-    body: data.body || '', icon: '/icon.svg', badge: '/icon.svg', data: { url: data.url || '/' },
+    body: data.body || '', icon: '/icon-192.png', badge: '/icon-192.png', data: { url: data.url || '/' },
   }));
 });
 

@@ -1,4 +1,5 @@
 import { getUser, getSettings, handleAuthCallback, oauthLogin, logout, refreshSession } from '@netlify/identity';
+import { ring, sparkline, columns, lineChart, heatmap, vizTable, initTooltips, haptic, celebrate, startRest, stopRest, restDefault, setRestDefault, levelFor, greeting, quoteOfDay } from './ui.js';
 
 /* ================= Utilidades ================= */
 
@@ -42,7 +43,7 @@ function applyTheme() {
   if (t === 'auto') document.documentElement.removeAttribute('data-theme');
   else document.documentElement.setAttribute('data-theme', t);
   const dark = t === 'dark' || (t === 'auto' && matchMedia('(prefers-color-scheme: dark)').matches);
-  $('meta[name=theme-color]').setAttribute('content', dark ? '#0f172a' : '#f8fafc');
+  $('meta[name=theme-color]').setAttribute('content', dark ? '#0a0a1f' : '#f5f3ff');
 }
 applyTheme();
 matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', applyTheme);
@@ -232,23 +233,76 @@ function checkNewBadges() {
   if (seen) {
     const fresh = earned.filter((b) => !seen.includes(b.id));
     fresh.forEach((b) => toast(`🏅 Nova conquista: ${b.icon} ${b.name}`, 3000));
+    if (fresh.length) setTimeout(() => celebrate('big'), 250);
   }
   store.set(key, earned.map((b) => b.id));
 }
+
+/* ================= Energia, níveis e atividade ================= */
+
+// Atividades feitas por dia: dias de desafio marcados, treinos concluídos e corridas feitas
+function activityByDay() {
+  const m = new Map();
+  const add = (d) => m.set(d, (m.get(d) || 0) + 1);
+  for (const c of S.challenges) for (const [d, e] of Object.entries(myChecks(c))) if (dayDone(c, e)) add(d);
+  for (const l of S.logs) if (l.finished) add(l.day);
+  for (const s of R?.sessions || []) if (s.done) add(s.day);
+  return m;
+}
+
+// Energia (XP): cada dia marcado, treino e corrida soma pontos
+function computeXP() {
+  let xp = 0;
+  for (const c of S.challenges) for (const e of Object.values(myChecks(c))) if (dayDone(c, e)) xp += 10;
+  xp += S.logs.filter((l) => l.finished).length * 30;
+  for (const s of R?.sessions || []) if (s.done) xp += 20 + Math.round(2 * (Number(s.actualKm || s.distanceKm) || 0));
+  xp += computeBadges().filter((b) => b.ok).length * 50;
+  return xp;
+}
+
+function checkLevelUp() {
+  const key = `level-${myId()}`;
+  const lv = levelFor(computeXP());
+  const prev = store.get(key);
+  if (prev && lv.n > prev) { toast(`🚀 Novo nível: ${lv.icon} ${lv.name}!`, 3200); setTimeout(() => celebrate('big'), 150); }
+  store.set(key, lv.n);
+}
+
+// Soma de uma medida por semana (domingo a sábado), das mais antigas para a atual
+function weekly(weeks, valueOfDay) {
+  const today = todayStr();
+  const sunday = addDays(today, -parseDate(today).getDay());
+  return Array.from({ length: weeks }, (_, i) => {
+    const start = addDays(sunday, -(weeks - 1 - i) * 7);
+    let v = 0;
+    for (let d = 0; d < 7; d++) v += valueOfDay(addDays(start, d)) || 0;
+    return { start, value: Math.round(v * 10) / 10, label: fmtDate(start, { day: '2-digit', month: '2-digit' }) };
+  });
+}
+
+const tile = (label, value, { delta = '', spark = '', up = false } = {}) => `
+  <div class="tile"><div class="lbl">${label}</div><div class="v">${value}</div>${delta ? `<div class="d ${up ? 'up' : ''}">${delta}</div>` : ''}${spark}</div>`;
 
 /* ================= Renderização ================= */
 
 const $view = $('#view');
 const TITLES = { hoje: 'Hoje', desafios: 'Desafios', treinos: 'Treinos', corrida: 'Corrida', perfil: 'Perfil' };
+let enterAnim = true;   // animação de entrada ao abrir uma aba
+let popSel = null;      // botão que acabou de ser marcado (efeito "pop")
 
 function render() {
   if (!S) return;
   document.body.classList.remove('logged-out');
   document.querySelectorAll('.tabs button').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
+  $('#hello').textContent = tab === 'hoje' ? greeting(S.me.name) : '';
   $('#title').textContent = TITLES[tab];
-  $('#today').textContent = fmtDate(todayStr(), { weekday: 'long', day: '2-digit', month: 'long' });
+  const dt = fmtDate(todayStr(), { weekday: 'short', day: '2-digit', month: 'short' }).replace(/\./g, '');
+  $('#today').textContent = dt.charAt(0).toUpperCase() + dt.slice(1);
   $view.innerHTML = ({ hoje: viewToday, desafios: viewChallenges, treinos: viewWorkouts, corrida: viewRun, perfil: viewProfile }[tab] || viewToday)();
+  if (enterAnim) { enterAnim = false; $view.classList.add('enter'); setTimeout(() => $view.classList.remove('enter'), 900); }
+  if (popSel) { $view.querySelector(popSel)?.classList.add('pop'); popSel = null; }
   checkNewBadges();
+  checkLevelUp();
 }
 
 const avatar = (m, size = 26) => m.avatar
@@ -257,9 +311,9 @@ const avatar = (m, size = 26) => m.avatar
 
 function progressLine(c, s, today) {
   const e = myChecks(c)[today];
-  if (c.kind === 'quantity') return `Hoje: <b>${fmtNum(e?.value)}</b> / ${fmtNum(c.target)}${esc(unitLabel(c))} · dia ${s.dayNum} de ${c.days} · 🔥 ${s.streak}`;
-  if (c.kind === 'weekly') return `Semana ${s.curWeek}/${s.weeks}: <b>${s.curCount}</b> de ${fmtNum(c.target)}x · 🔥 ${s.streak} semanas`;
-  return `Dia ${s.dayNum} de ${c.days} · ${s.done} feitos · 🔥 ${s.streak} seguidos`;
+  if (c.kind === 'quantity') return `<span class="day-big">Hoje <b>${fmtNum(e?.value)}</b> / ${fmtNum(c.target)}${esc(unitLabel(c))}</span><span class="streak">🔥 ${s.streak}</span>`;
+  if (c.kind === 'weekly') return `<span class="day-big">Semana: <b>${s.curCount}</b> de ${fmtNum(c.target)}x</span><span class="streak">🔥 ${s.streak} sem</span>`;
+  return `<span class="day-big">Dia <b>${s.dayNum}</b> de ${c.days}</span><span class="streak">🔥 ${s.streak}</span>`;
 }
 
 function groupToday(c, today) {
@@ -277,20 +331,20 @@ function challengeToday(c, today) {
   const pct = c.kind === 'quantity' ? Math.min(100, Math.round(((entry?.value || 0) / (c.target || 1)) * 100)) : s.pct;
   const btn = c.kind === 'quantity'
     ? `<button class="check ${on ? 'on' : ''} qty" data-action="checkin" data-id="${c.id}" data-day="${today}" aria-label="Lançar quantidade">${on ? '✓' : '+'}</button>`
-    : `<button class="check ${on ? 'on' : ''}" data-action="toggle" data-id="${c.id}" data-day="${today}" aria-label="Marcar hoje">✓</button>`;
+    : `<button class="check ${on ? 'on' : ''}" data-action="toggle" data-id="${c.id}" data-day="${today}" data-pop="c-${c.id}" aria-label="${on ? 'Desmarcar hoje' : 'Marcar hoje'}" aria-pressed="${on}">✓</button>`;
   return `
-  <div class="card">
+  <div class="card chal">
     <div class="row">
       <div class="emoji">${esc(c.emoji)}</div>
       <div class="grow">
         <div class="name">${esc(c.name)}</div>
-        <div class="muted">${progressLine(c, s, today)}</div>
-        <div class="bar"><i style="width:${pct}%"></i></div>
+        <div class="meta">${progressLine(c, s, today)}</div>
       </div>
       ${btn}
     </div>
-    <div class="row between" style="margin-top:6px">
-      ${groupToday(c, today) || '<span></span>'}
+    <div class="bar" role="img" aria-label="${pct}% concluído"><i style="width:${pct}%"></i></div>
+    <div class="row between">
+      ${groupToday(c, today) || `<span class="muted">${s.done} de ${s.weekly ? s.weeks : c.days} ${s.weekly ? 'semanas' : 'dias'} · ${pct}%</span>`}
       <button class="btn-link" data-action="checkin" data-id="${c.id}" data-day="${today}">${entry?.note || entry?.photo ? '📝 Ver anotação' : '📝 Anotar / foto'}</button>
     </div>
   </div>`;
@@ -305,7 +359,7 @@ function setRow(day, w, ei, si, s) {
       <span class="muted">×</span>
       <input type="number" inputmode="decimal" min="0" step="0.5" value="${s.weight}" data-action="set-field" data-field="weight" ${a} aria-label="Carga">
       <span class="muted">kg</span>
-      <button class="check sm ${s.done ? 'on' : ''}" data-action="set-done" ${a} aria-label="Série feita">✓</button>
+      <button class="check sm ${s.done ? 'on' : ''}" data-action="set-done" ${a} data-pop="s-${w.id}-${ei}-${si}" aria-label="Série ${si + 1} feita" aria-pressed="${s.done}">✓</button>
     </div>`;
 }
 
@@ -315,10 +369,15 @@ function workoutCard(day, w) {
   const done = log.exercises.reduce((t, e) => t + e.sets.filter((s) => s.done).length, 0);
   return `
   <div class="card">
-    <div class="row between">
-      <div class="name">${esc(w.name)}</div>
-      <span class="chip ${log.finished ? 'ok' : ''}">${log.finished ? '✓ Concluído' : `${done}/${total} séries`}</span>
+    <div class="row">
+      <div class="wk-ico" aria-hidden="true">🏋️</div>
+      <div class="grow">
+        <div class="name">${esc(w.name)}</div>
+        <div class="muted">${log.exercises.length} exercícios · ${done}/${total} séries</div>
+      </div>
+      ${log.finished ? '<span class="chip ok">✓ Concluído</span>' : `<button class="btn-small" data-action="rest-cycle" aria-label="Tempo de descanso entre séries">⏱ ${restDefault()}s</button>`}
     </div>
+    <div class="bar" role="img" aria-label="${done} de ${total} séries"><i style="width:${total ? Math.round((done / total) * 100) : 0}%"></i></div>
     ${log.exercises.map((e, ei) => {
       const allDone = e.sets.length && e.sets.every((s) => s.done);
       return `
@@ -326,7 +385,7 @@ function workoutCard(day, w) {
         <div class="row between">
           <div class="ex-name">${allDone ? '✅ ' : ''}${esc(e.name)}</div>
           <div class="row" style="gap:4px">
-            <button class="btn-small" data-action="chart" data-name="${esc(e.name)}" aria-label="Evolução">📈</button>
+            <button class="btn-small" data-action="chart" data-name="${esc(e.name)}" aria-label="Evolução de ${esc(e.name)}">📈</button>
             <button class="btn-small" data-action="set-remove" data-w="${w.id}" data-e="${ei}" data-day="${day}" aria-label="Remover série">−</button>
             <button class="btn-small" data-action="set-add" data-w="${w.id}" data-e="${ei}" data-day="${day}" aria-label="Adicionar série">+</button>
           </div>
@@ -334,10 +393,43 @@ function workoutCard(day, w) {
         ${e.sets.map((s, si) => setRow(day, w, ei, si, s)).join('')}
       </div>`;
     }).join('')}
-    <button class="btn-block ${log.finished ? '' : 'btn-primary'}" style="margin-top:12px" data-action="finish" data-w="${w.id}" data-day="${day}">
-      ${log.finished ? 'Desmarcar treino' : 'Concluir treino'}
+    <button class="btn-block ${log.finished ? '' : 'btn-primary'}" style="margin-top:14px" data-action="finish" data-w="${w.id}" data-day="${day}">
+      ${log.finished ? 'Desmarcar treino' : 'Concluir treino 💪'}
     </button>
   </div>`;
+}
+
+// Tarefas do dia: desafios ativos, treinos do dia e corrida do dia
+function todayTasks(today) {
+  const items = [];
+  for (const c of S.challenges.filter(isActive)) items.push(dayDone(c, myChecks(c)[today]));
+  const scheduled = workoutsForDay(today);
+  const extra = S.workouts.filter((w) => !scheduled.includes(w) && findLog(today, w.id));
+  for (const w of [...scheduled, ...extra]) items.push(!!findLog(today, w.id)?.finished);
+  const run = R?.access?.active && (R.sessions || []).find((s) => s.day === today);
+  if (run) items.push(!!run.done);
+  return { total: items.length, done: items.filter(Boolean).length };
+}
+
+function heroToday(today) {
+  const t = todayTasks(today);
+  const xp = computeXP();
+  const lv = levelFor(xp);
+  const streak = Math.max(0, ...S.challenges.filter(isActive).map((c) => challengeStats(c).streak));
+  const badges = computeBadges();
+  const got = badges.filter((b) => b.ok).length;
+  const [q, src] = quoteOfDay(today);
+  const sub = !t.total ? 'dia livre' : t.done === t.total ? 'dia completo! 🎉' : 'feitos hoje';
+  return `
+    <div class="card hero">
+      ${ring({ value: t.done, max: t.total || 1, center: t.total ? `${t.done}/${t.total}` : '☀️', sub, label: `${t.done} de ${t.total} tarefas de hoje feitas` })}
+      <div class="hero-stats">
+        <div class="hero-stat"><span class="ico">🔥</span><div><b>${streak} ${streak === 1 ? 'dia' : 'dias'}</b><small>maior sequência ativa</small></div></div>
+        <div class="hero-stat"><span class="ico">${lv.icon}</span><div><b>Nível ${lv.n} · ${lv.name}</b><small>${fmtNum(xp)} de energia</small></div></div>
+        <div class="hero-stat"><span class="ico">🏅</span><div><b>${got} de ${badges.length}</b><small>conquistas</small></div></div>
+      </div>
+      <div class="quote">${esc(q)}<small>${esc(src)}</small></div>
+    </div>`;
 }
 
 function viewToday() {
@@ -347,11 +439,12 @@ function viewToday() {
   const extra = S.workouts.filter((w) => !scheduled.includes(w) && findLog(today, w.id));
   const list = [...scheduled, ...extra];
   return `
-    <h2>Desafios ativos</h2>
-    ${active.length ? active.map((c) => challengeToday(c, today)).join('') : `<div class="card empty">Nenhum desafio ativo.<br><br><button class="btn-primary" data-action="new-challenge">+ Criar desafio</button> <button data-action="join">Entrar com código</button></div>`}
+    ${heroToday(today)}
+    <h2>Desafios de hoje</h2>
+    ${active.length ? active.map((c) => challengeToday(c, today)).join('') : `<div class="card empty"><div class="big">🎯</div>Nenhum desafio ativo ainda.<br><br><button class="btn-primary" data-action="new-challenge">+ Criar desafio</button> <button data-action="join">Entrar com código</button></div>`}
     ${runTodayCard(today)}
-    <h2>Treino de hoje (${WEEKDAYS[parseDate(today).getDay()]})</h2>
-    ${list.length ? list.map((w) => workoutCard(today, w)).join('') : `<div class="card empty">${S.workouts.length ? 'Dia de descanso 😴' : 'Cadastre seus treinos na aba Treinos.'}</div>`}
+    <h2>Treino de hoje · ${WEEKDAYS[parseDate(today).getDay()]}</h2>
+    ${list.length ? list.map((w) => workoutCard(today, w)).join('') : `<div class="card empty"><div class="big">${S.workouts.length ? '😴' : '🏋️'}</div>${S.workouts.length ? 'Dia de descanso. Recuperar também é treino.' : 'Cadastre seus treinos na aba Treinos.'}</div>`}
     ${S.workouts.length ? `<button class="btn-block" data-action="pick-workout" data-day="${today}">+ Fazer outro treino hoje</button>` : ''}
   `;
 }
@@ -405,7 +498,8 @@ function challengeCard(c, today) {
     const partial = !ok && e && e.value > 0;
     const miss = !ok && d < today && c.kind !== 'weekly';
     const cls = ok ? 'done' : partial ? 'partial' : miss ? 'miss' : d > today ? 'future' : '';
-    cells.push(`<button class="${cls} ${d === today ? 'today' : ''}" data-action="checkin" data-id="${c.id}" data-day="${d}" ${d > today ? 'disabled' : ''} title="${fmtDate(d)}">${i + 1}${e?.note || e?.photo ? '<i class="dot"></i>' : ''}</button>`);
+    const state = ok ? 'feito' : partial ? 'parcial' : miss ? 'faltou' : d > today ? 'ainda não chegou' : 'em aberto';
+    cells.push(`<button class="${cls} ${d === today ? 'today' : ''}" data-action="checkin" data-id="${c.id}" data-day="${d}" ${d > today ? 'disabled' : ''} aria-label="Dia ${i + 1}, ${fmtDate(d)}: ${state}">${i + 1}${e?.note || e?.photo ? '<i class="dot"></i>' : ''}</button>`);
   }
   const statusChip = { ativo: '', futuro: '<span class="chip">Começa em breve</span>', 'concluído': '<span class="chip ok">🏆 Concluído</span>', encerrado: '<span class="chip">Encerrado</span>' }[s.status];
   const kindLabel = c.kind === 'quantity' ? `Meta: ${fmtNum(c.target)}${esc(unitLabel(c))}/dia` : c.kind === 'weekly' ? `Meta: ${fmtNum(c.target)}x por semana` : 'Todo dia';
@@ -421,17 +515,19 @@ function challengeCard(c, today) {
       <button class="btn-small" data-action="edit-challenge" data-id="${c.id}">Editar</button>
     </div>
     ${statusChip ? `<div style="margin-top:8px">${statusChip}</div>` : ''}
-    <div class="bar"><i style="width:${s.pct}%"></i></div>
+    <div class="bar" role="img" aria-label="${s.pct}% concluído"><i style="width:${s.pct}%"></i></div>
     <div class="stats">
       <div><b>${s.done}</b><span>${unit} feitos</span></div>
       <div><b>${s.left}</b><span>faltam</span></div>
       <div><b>🔥${s.streak}</b><span>seguidos</span></div>
       <div><b>${s.missed}</b><span>falhas</span></div>
     </div>
+    <div class="cal-head" aria-hidden="true">${['D', 'S', 'T', 'Q', 'Q', 'S', 'S'].map((x) => `<span>${x}</span>`).join('')}</div>
     <div class="cal">${cells.join('')}</div>
+    <div class="cal-legend"><span><i class="l-done"></i>Feito</span>${c.kind === 'quantity' ? '<span><i class="l-partial"></i>Parcial</span>' : ''}${c.kind !== 'weekly' ? '<span><i class="l-miss"></i>Faltou</span>' : ''}<span><i class="l-today"></i>Hoje</span></div>
     ${ranking(c)}
     ${diary(c)}
-    <button class="btn-block" style="margin-top:12px" data-action="invite" data-id="${c.id}">👥 Convidar amigos</button>
+    <button class="btn-block" style="margin-top:14px" data-action="invite" data-id="${c.id}">👥 Convidar amigos</button>
   </div>`;
 }
 
@@ -439,53 +535,97 @@ function viewChallenges() {
   const today = todayStr();
   const order = { ativo: 0, futuro: 1, 'concluído': 2, encerrado: 3 };
   const sorted = [...S.challenges].sort((a, b) => order[challengeStats(a).status] - order[challengeStats(b).status]);
+  const active = S.challenges.filter(isActive).length;
+  const won = S.challenges.filter((c) => challengeStats(c).status === 'concluído').length;
+  const best = Math.max(0, ...S.challenges.filter((c) => c.kind !== 'weekly').map((c) => challengeStats(c).best));
+  const marked = S.challenges.reduce((t, c) => t + Object.values(myChecks(c)).filter((e) => dayDone(c, e)).length, 0);
+  const perWeek = weekly(8, (d) => S.challenges.reduce((t, c) => t + (dayDone(c, myChecks(c)[d]) ? 1 : 0), 0));
   return `
+    ${S.challenges.length ? `<div class="kpis">
+      ${tile('Ativos', active)}
+      ${tile('Vencidos', won)}
+      ${tile('Melhor sequência', `${best}<small> ${best === 1 ? 'dia' : 'dias'}</small>`)}
+      ${tile('Dias marcados', marked, { delta: `${perWeek[perWeek.length - 1].value} nesta semana`, spark: sparkline(perWeek.map((w) => w.value), 'Dias marcados por semana, últimas 8 semanas') })}
+    </div>` : ''}
     <div class="row" style="margin-bottom:14px">
       <button class="btn-primary grow" data-action="new-challenge">+ Novo desafio</button>
       <button class="grow" data-action="join">🔑 Entrar com código</button>
     </div>
-    ${sorted.length ? sorted.map((c) => challengeCard(c, today)).join('') : '<div class="empty">Crie um desafio ou entre no de um amigo com o código de convite.</div>'}
+    ${sorted.length ? sorted.map((c) => challengeCard(c, today)).join('') : '<div class="card empty"><div class="big">🏆</div>Crie um desafio ou entre no de um amigo com o código de convite.</div>'}
   `;
 }
 
 function viewWorkouts() {
+  const today = todayStr();
+  const finished = S.logs.filter((l) => l.finished);
+  const perWeek = weekly(8, (d) => finished.filter((l) => l.day === d).length);
+  const last30 = finished.filter((l) => diffDays(l.day, today) < 30).length;
+  const weekStart = addDays(today, -parseDate(today).getDay());
+  const volume = S.logs.filter((l) => l.day >= weekStart).reduce((t, l) => t + l.exercises.reduce((u, e) => u + e.sets.filter((s) => s.done || l.finished).reduce((v, s) => v + (Number(s.reps) || 0) * (Number(s.weight) || 0), 0), 0), 0);
+  const lastDone = (w) => finished.filter((l) => l.workoutId === w.id).map((l) => l.day).sort().pop();
   return `
+    ${finished.length ? `<div class="kpis">
+      ${tile('Nesta semana', perWeek[perWeek.length - 1].value, { delta: 'treinos concluídos', spark: sparkline(perWeek.map((w) => w.value), 'Treinos por semana, últimas 8 semanas') })}
+      ${tile('Últimos 30 dias', last30, { delta: 'treinos' })}
+      ${tile('Volume na semana', `${fmtNum(Math.round(volume))}<small> kg</small>`, { delta: 'séries × reps × carga' })}
+      ${tile('No total', finished.length, { delta: 'treinos concluídos' })}
+    </div>` : ''}
     <button class="btn-primary btn-block" data-action="new-workout" style="margin-bottom:14px">+ Novo treino</button>
-    ${S.workouts.length ? S.workouts.map((w) => `
+    ${S.workouts.length ? S.workouts.map((w) => {
+      const last = lastDone(w);
+      return `
       <div class="card">
-        <div class="row between">
-          <div class="name">${esc(w.name)}</div>
+        <div class="row">
+          <div class="wk-ico" aria-hidden="true">🏋️</div>
+          <div class="grow"><div class="name">${esc(w.name)}</div><div class="muted">${last ? `Último: ${fmtDate(last, { weekday: 'short', day: '2-digit', month: 'short' })}` : 'Ainda não feito'}</div></div>
           <button class="btn-small" data-action="edit-workout" data-id="${w.id}">Editar</button>
         </div>
-        <div class="chips" style="margin:8px 0">
+        <div class="chips" style="margin:12px 0 6px">
           ${WEEKDAYS.map((d, i) => `<span class="chip ${w.weekdays.includes(i) ? 'on' : ''}">${d}</span>`).join('')}
         </div>
         ${w.exercises.map((e) => {
           const h = exerciseHistory(e.name);
-          const last = h[h.length - 1];
+          const lastP = h[h.length - 1];
           return `<div class="ex-line">
-            <span class="grow">${esc(e.name)} <span class="muted">— ${e.sets}x${e.reps} · ${fmtNum(last ? last.max : e.weight)} kg</span></span>
+            <span class="grow">${esc(e.name)} <span class="muted">· ${e.sets}x${e.reps} · ${fmtNum(lastP ? lastP.max : e.weight)} kg</span></span>
+            ${h.length >= 2 ? `<span class="ex-spark">${sparkline(h.slice(-8).map((p) => p.max), `Carga de ${e.name} nas últimas vezes`, { fromZero: false })}</span>` : ''}
             <button class="btn-small" data-action="chart" data-name="${esc(e.name)}" aria-label="Evolução de ${esc(e.name)}">📈</button>
           </div>`;
         }).join('') || '<div class="muted">Sem exercícios</div>'}
-        <button class="btn-block" style="margin-top:10px" data-action="start-workout" data-id="${w.id}">▶️ Fazer hoje</button>
-      </div>`).join('') : '<div class="empty">Cadastre seus treinos (A, B, C…) e os dias da semana de cada um.</div>'}
+        <button class="btn-block" style="margin-top:12px" data-action="start-workout" data-id="${w.id}">▶️ Fazer hoje</button>
+      </div>`;
+    }).join('') : '<div class="card empty"><div class="big">🏋️</div>Cadastre seus treinos (A, B, C…) e os dias da semana de cada um.</div>'}
   `;
 }
 
 function viewProfile() {
   const me = S.me;
+  const today = todayStr();
+  const xp = computeXP();
+  const lv = levelFor(xp);
   const finished = S.logs.filter((l) => l.finished);
-  const last30 = finished.filter((l) => diffDays(l.day, todayStr()) < 30).length;
-  const won = S.challenges.filter((c) => challengeStats(c).status === 'concluído').length;
   const badges = computeBadges();
+  const acts = activityByDay();
   const theme = store.get('theme', 'auto');
+  const restSec = restDefault();
   const pushOk = 'serviceWorker' in navigator && 'PushManager' in window;
   const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone;
   const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
   const perm = typeof Notification !== 'undefined' ? Notification.permission : 'default';
   const hours = Array.from({ length: 24 }, (_, h) => `<option value="${h}" ${me.reminderHour === h ? 'selected' : ''}>${String(h).padStart(2, '0')}:00</option>`).join('');
   const logs = S.logs.filter((l) => l.finished || l.exercises.some((e) => e.sets.some((s) => s.done)));
+
+  // Números dos últimos 30 dias e tendência semanal
+  const in30 = (d) => d <= today && diffDays(d, today) < 30;
+  const activeDays30 = [...acts.keys()].filter(in30).length;
+  const runs = (R?.sessions || []).filter((s) => s.done);
+  const km = (s) => Number(s.actualKm || s.distanceKm) || 0;
+  const km30 = runs.filter((s) => in30(s.day)).reduce((t, s) => t + km(s), 0);
+  const wActs = weekly(8, (d) => acts.get(d) || 0);
+  const wWork = weekly(8, (d) => finished.filter((l) => l.day === d).length);
+  const wKm = weekly(8, (d) => runs.filter((s) => s.day === d).reduce((t, s) => t + km(s), 0));
+  const bestStreak = Math.max(0, ...S.challenges.filter((c) => c.kind !== 'weekly').map((c) => challengeStats(c).best));
+  const heatWeeks = weekly(16, (d) => acts.get(d) || 0);
 
   let pushBlock;
   if (isIOS && !standalone) {
@@ -501,24 +641,48 @@ function viewProfile() {
         <button class="grow ${perm === 'granted' ? '' : 'btn-blue'}" data-action="enable-push">${perm === 'granted' ? '🔔 Notificações ativas' : '🔔 Ativar notificações'}</button>
         ${perm === 'granted' ? '<button data-action="test-push">Testar</button>' : ''}
       </div>
-      <div class="muted" style="margin-top:6px">Você só recebe o aviso se tiver desafio sem marcar no dia.</div>`;
+      <div class="muted" style="margin-top:6px">Você só recebe o aviso se tiver desafio ou corrida sem marcar no dia.</div>`;
   }
 
   return `
     <div class="card row">
-      ${avatar(me, 48)}
+      ${avatar(me, 52)}
       <div class="grow"><div class="name">${esc(me.name)}</div><div class="muted">${esc(me.email)}</div></div>
       <button class="btn-small" data-action="logout">Sair</button>
     </div>
-    <div class="card">
-      <div class="stats" style="grid-template-columns:repeat(3,1fr);margin:0">
-        <div><b>${finished.length}</b><span>treinos feitos</span></div>
-        <div><b>${last30}</b><span>últimos 30 dias</span></div>
-        <div><b>${won}</b><span>desafios vencidos</span></div>
+
+    <div class="card level">
+      <div class="level-badge" aria-hidden="true">${lv.icon}</div>
+      <div>
+        <div class="lv">Nível ${lv.n}</div>
+        <div class="ln">${lv.name}</div>
+        <div class="xp-bar" role="img" aria-label="${Math.round(lv.pct * 100)}% até o próximo nível"><i style="width:${Math.round(lv.pct * 100)}%"></i></div>
+        <div class="xp-txt">${fmtNum(xp)} de energia${lv.next ? ` · faltam ${fmtNum(lv.toNext)} para ${lv.next.icon} ${lv.next.name}` : ' · nível máximo!'}</div>
       </div>
     </div>
 
-    <h2>Conquistas (${badges.filter((b) => b.ok).length}/${badges.length})</h2>
+    <h2>Últimos 30 dias</h2>
+    <div class="kpis">
+      ${tile('Dias ativos', `${activeDays30}<small> de 30</small>`, { spark: sparkline(wActs.map((w) => w.value), 'Atividades por semana, últimas 8 semanas') })}
+      ${tile('Treinos', finished.filter((l) => in30(l.day)).length, { spark: sparkline(wWork.map((w) => w.value), 'Treinos por semana, últimas 8 semanas') })}
+      ${R?.access?.active && runs.length ? tile('Km corridos', `${fmtNum(km30)}<small> km</small>`, { spark: sparkline(wKm.map((w) => w.value), 'Km por semana, últimas 8 semanas') }) : tile('Desafios vencidos', S.challenges.filter((c) => challengeStats(c).status === 'concluído').length)}
+      ${tile('Melhor sequência', `${bestStreak}<small> ${bestStreak === 1 ? 'dia' : 'dias'}</small>`)}
+    </div>
+
+    <h2>Constelação de atividades</h2>
+    <div class="card">
+      <div class="viz-head"><div class="name">Seus dias ativos</div><span class="muted">últimas 16 semanas</span></div>
+      ${heatmap(acts, today, { weeks: 16, addDays, label: `Mapa de calor: ${[...acts.keys()].length} dias com atividade` })}
+      ${vizTable(['Semana de', 'Atividades'], heatWeeks.slice().reverse().map((w) => [w.label, String(w.value)]))}
+    </div>
+
+    <h2>Atividades por semana</h2>
+    <div class="card">
+      ${columns(wActs.map((w) => ({ label: w.label, value: w.value, tip: `${w.value} ${w.value === 1 ? 'atividade' : 'atividades'}|Semana de ${w.label}` })), { title: 'Atividades por semana nas últimas 8 semanas' })}
+      ${vizTable(['Semana de', 'Atividades', 'Treinos'], wActs.map((w, i) => [w.label, String(w.value), String(wWork[i].value)]))}
+    </div>
+
+    <h2>Conquistas · ${badges.filter((b) => b.ok).length}/${badges.length}</h2>
     <div class="badges">
       ${badges.map((b) => `<div class="badge ${b.ok ? 'ok' : ''}" title="${esc(b.desc)}"><span>${b.ok ? b.icon : '🔒'}</span><b>${esc(b.name)}</b><small>${esc(b.desc)}</small></div>`).join('')}
     </div>
@@ -531,55 +695,43 @@ function viewProfile() {
       ${[['auto', '🌗 Automático'], ['light', '☀️ Claro'], ['dark', '🌙 Escuro']].map(([v, l]) => `<button class="${theme === v ? 'on' : ''}" data-action="theme" data-v="${v}">${l}</button>`).join('')}
     </div>
 
+    <h2>Descanso entre séries</h2>
+    <div class="card seg" style="grid-template-columns:repeat(4,1fr)">
+      ${[60, 90, 120, 180].map((v) => `<button class="${restSec === v ? 'on' : ''}" data-action="rest-set" data-v="${v}">${v}s</button>`).join('')}
+    </div>
+
     <h2>Histórico de treinos</h2>
     ${logs.length ? logs.slice(0, 60).map((l) => `
       <div class="card">
         <div class="row between">
           <div class="name">${esc(l.workoutName)}</div>
-          <span class="chip ${l.finished ? 'ok' : ''}">${l.finished ? '✓' : 'parcial'}</span>
+          <span class="chip ${l.finished ? 'ok' : ''}">${l.finished ? '✓ Concluído' : 'parcial'}</span>
         </div>
         <div class="muted" style="margin-bottom:6px">${fmtDate(l.day, { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' })}</div>
         ${l.exercises.map((e) => `<div class="muted">${e.sets.every((s) => s.done) ? '✅' : '⬜'} ${esc(e.name)} — ${e.sets.map((s) => `${s.reps}×${fmtNum(s.weight)}`).join(' · ')} kg</div>`).join('')}
-      </div>`).join('') : '<div class="empty">Nenhum treino registrado ainda.</div>'}
+      </div>`).join('') : '<div class="card empty">Nenhum treino registrado ainda.</div>'}
   `;
 }
 
 /* ================= Gráfico de evolução ================= */
 
-function chartSvg(points) {
-  if (points.length < 2) return '<div class="empty">Faça este exercício pelo menos 2 vezes para ver o gráfico.</div>';
-  const W = 320, H = 180, P = { l: 34, r: 10, t: 12, b: 26 };
-  const ys = points.map((p) => p.max);
-  let min = Math.min(...ys), max = Math.max(...ys);
-  if (min === max) { min -= 5; max += 5; }
-  const pad = (max - min) * 0.1; min = Math.max(0, min - pad); max += pad;
-  const t0 = parseDate(points[0].day).getTime(), t1 = parseDate(points[points.length - 1].day).getTime();
-  const x = (p) => P.l + ((parseDate(p.day).getTime() - t0) / (t1 - t0 || 1)) * (W - P.l - P.r);
-  const y = (v) => P.t + (1 - (v - min) / (max - min)) * (H - P.t - P.b);
-  const path = points.map((p, i) => `${i ? 'L' : 'M'}${x(p).toFixed(1)},${y(p.max).toFixed(1)}`).join(' ');
-  const ticks = [min, (min + max) / 2, max];
-  return `
-    <svg viewBox="0 0 ${W} ${H}" class="chart" role="img" aria-label="Evolução da carga">
-      ${ticks.map((v) => `<line x1="${P.l}" x2="${W - P.r}" y1="${y(v)}" y2="${y(v)}" class="grid"/><text x="${P.l - 6}" y="${y(v) + 4}" text-anchor="end">${Math.round(v)}</text>`).join('')}
-      <path d="${path}" class="line"/>
-      ${points.map((p) => `<circle cx="${x(p)}" cy="${y(p.max)}" r="3.5" class="pt"><title>${fmtDate(p.day)}: ${fmtNum(p.max)} kg</title></circle>`).join('')}
-      <text x="${P.l}" y="${H - 6}">${fmtDate(points[0].day)}</text>
-      <text x="${W - P.r}" y="${H - 6}" text-anchor="end">${fmtDate(points[points.length - 1].day)}</text>
-    </svg>`;
-}
 
 function openChart(name) {
   const h = exerciseHistory(name);
   const first = h[0], last = h[h.length - 1], best = h.reduce((a, p) => (p.max > (a?.max ?? -1) ? p : a), null);
+  const long = { day: '2-digit', month: 'short', year: '2-digit' };
   openModal(`
     <h3>📈 ${esc(name)}</h3>
-    ${h.length ? `<div class="stats" style="grid-template-columns:repeat(3,1fr);margin:0 0 12px">
-      <div><b>${fmtNum(first.max)}</b><span>primeira (kg)</span></div>
-      <div><b>${fmtNum(last.max)}</b><span>última (kg)</span></div>
-      <div><b>${fmtNum(best.max)}</b><span>recorde (kg)</span></div>
+    ${h.length ? `<div class="kpis" style="grid-template-columns:repeat(3,1fr)">
+      ${tile('Primeira', `${fmtNum(first.max)}<small> kg</small>`)}
+      ${tile('Última', `${fmtNum(last.max)}<small> kg</small>`, last.max > first.max ? { delta: `+${fmtNum(last.max - first.max)} kg`, up: true } : {})}
+      ${tile('Recorde', `${fmtNum(best.max)}<small> kg</small>`)}
     </div>` : ''}
-    ${chartSvg(h)}
-    ${h.length ? `<div class="hist">${h.slice().reverse().slice(0, 12).map((p) => `<div class="row between"><span>${fmtDate(p.day, { day: '2-digit', month: 'short', year: '2-digit' })}</span><span>${fmtNum(p.max)} kg <span class="muted">· vol ${fmtNum(p.vol)}</span></span></div>`).join('')}</div>` : ''}
+    ${h.length >= 2
+      ? `<div class="viz-head"><div class="name">Carga máxima por treino</div><span class="muted">kg</span></div>
+         ${lineChart(h.map((p) => ({ x: fmtDate(p.day), value: p.max, tip: `${fmtNum(p.max)} kg|${fmtDate(p.day, long)} · volume ${fmtNum(p.vol)}` })), { unit: ' kg', title: `Carga máxima em ${name} ao longo do tempo` })}
+         ${vizTable(['Data', 'Carga máx. (kg)', 'Volume'], h.slice().reverse().map((p) => [fmtDate(p.day, long), fmtNum(p.max), fmtNum(p.vol)]))}`
+      : '<div class="empty">Faça este exercício pelo menos 2 vezes para ver a evolução.</div>'}
     <div class="actions"><button value="cancel">Fechar</button></div>`);
 }
 
@@ -707,6 +859,7 @@ function openCheckin(c, day) {
       const value = isQty ? Number(f.get('value')) || 0 : f.get('done') === 'on' ? 1 : 0;
       const note = f.get('note').trim();
       if (!value && !note && !photo) { removeCheck(c, day); return; }
+      if (!dayDone(c, myChecks(c)[day]) && dayDone(c, { value })) { haptic(15); celebrate('small'); }
       setCheck(c, day, { value, note, photo });
     },
     onClick(ev) {
@@ -939,35 +1092,50 @@ function planView(profile, sessions, today, { action = 'run-open', who = 'me' } 
   const curWeek = cur?.week || 1;
   const past = sessions.filter((s) => s.day < today);
   const done = sessions.filter((s) => s.done).length;
+  const onTime = past.length ? Math.round((past.filter((s) => s.done).length / past.length) * 100) : 100;
   const z = profile.paces;
   const meta = profile.meta;
   const daysToRace = profile.raceDate ? diffDays(today, profile.raceDate) : null;
+  const next = sessions.find((s) => s.day >= today && !s.done);
   const zones = meta?.zonas?.length
     ? meta.zonas.map((x) => `<span>${esc(x.nome)}</span><span>${esc(x.ritmo)}<br><small class="muted">${esc(x.descricao)}</small></span>`).join('')
     : `<span>Regenerativo</span><span>${esc(z.regenerativo)}</span><span>Leve</span><span>${esc(z.leve)}</span><span>Longão</span><span>${esc(z.longo)}</span>
        <span>Tempo (limiar)</span><span>${esc(z.ritmo)}</span><span>Intervalado</span><span>${esc(z.intervalado)}</span>`;
+  // Volume por semana: planejado × feito
+  const vol = weeksOf(sessions).map(([w, list]) => {
+    const plan = Math.round(list.reduce((t, s) => t + (s.distanceKm || 0), 0) * 10) / 10;
+    const doneKm = Math.round(list.filter((s) => s.done).reduce((t, s) => t + (Number(s.actualKm) || s.distanceKm || 0), 0) * 10) / 10;
+    return { label: `S${w}`, plan, value: doneKm, tip: `${fmtNum(doneKm)} de ${fmtNum(plan)} km|Semana ${w}${list[0].phase ? ` · ${list[0].phase}` : ''}` };
+  });
+  const pct = Math.round((done / Math.max(1, sessions.length)) * 100);
   return `
     ${profile.error ? `<div class="note">⚠️ ${esc(profile.error)}</div>` : ''}
+    <div class="card countdown">
+      ${ring({ value: done, max: sessions.length || 1, center: `${pct}%`, sub: 'da planilha', label: `${done} de ${sessions.length} treinos feitos` })}
+      <div style="min-width:0">
+        <div class="name">${esc(meta?.titulo || GOALS[profile.goal])}</div>
+        <div class="muted">${LEVELS[profile.level]} · ${profile.weeks} semanas · ${profile.daysPerWeek} treinos/sem</div>
+        <div class="chips" style="margin-top:8px">
+          <span class="chip">Semana ${curWeek}/${profile.weeks}${cur?.phase ? ` · ${esc(cur.phase)}` : ''}</span>
+          <span class="chip ${onTime >= 80 ? 'ok' : ''}">${onTime}% em dia</span>
+          ${daysToRace !== null && daysToRace >= 0 ? `<span class="chip on">🏁 ${daysToRace === 0 ? 'Prova hoje!' : `${daysToRace} ${daysToRace === 1 ? 'dia' : 'dias'} p/ prova`}</span>` : ''}
+        </div>
+      </div>
+      ${meta?.resumo ? `<p class="muted" style="grid-column:1/-1">${esc(meta.resumo)}</p>` : ''}
+      ${profile.time5k && !meta?.resumo?.includes('Previsão') ? `<p class="muted" style="grid-column:1/-1">Previsão para a prova: <b>${esc(profile.prediction.time)}</b> (${esc(profile.prediction.pace)})${profile.target ? ` · meta: ${esc(profile.target)}` : ''}</p>` : ''}
+    </div>
+    ${next ? nextRunCard(next, today, action) : ''}
     <div class="card">
-      <div class="row between">
-        <div><div class="name">🎯 ${esc(meta?.titulo || GOALS[profile.goal])}</div>
-          <div class="muted">${LEVELS[profile.level]} · ${profile.weeks} semanas · ${profile.daysPerWeek} treinos/sem${profile.raceDate ? ` · prova ${fmtDate(profile.raceDate)}` : ''}</div></div>
-        ${daysToRace !== null && daysToRace >= 0 ? `<div style="text-align:center"><b style="font-size:22px">${daysToRace}</b><div class="muted">dias</div></div>` : ''}
-      </div>
-      ${meta?.resumo ? `<p class="muted" style="margin:8px 0 0">${esc(meta.resumo)}</p>` : ''}
-      <div class="bar"><i style="width:${Math.round((done / Math.max(1, sessions.length)) * 100)}%"></i></div>
-      <div class="stats" style="grid-template-columns:repeat(3,1fr)">
-        <div><b>${curWeek}/${profile.weeks}</b><span>semana · ${esc(cur?.phase || '')}</span></div>
-        <div><b>${done}/${sessions.length}</b><span>treinos feitos</span></div>
-        <div><b>${past.length ? Math.round((past.filter((s) => s.done).length / past.length) * 100) : 100}%</b><span>em dia</span></div>
-      </div>
-      ${profile.time5k && !meta?.resumo?.includes('Previsão') ? `<div class="muted" style="margin-top:10px">Previsão para a prova: <b>${esc(profile.prediction.time)}</b> (${esc(profile.prediction.pace)})${profile.target ? ` · meta: ${esc(profile.target)}` : ''}</div>` : ''}
+      <div class="viz-head"><div class="name">Volume por semana</div><span class="muted">km</span></div>
+      <div class="viz-legend"><span><i style="background:var(--ghost)"></i>Planejado</span><span><i style="background:var(--accent)"></i>Feito</span></div>
+      ${columns(vol, { planned: true, unit: ' km', title: 'Quilômetros planejados e feitos por semana' })}
+      ${vizTable(['Semana', 'Planejado (km)', 'Feito (km)'], vol.map((w) => [w.label, fmtNum(w.plan), fmtNum(w.value)]))}
     </div>
     <div class="card">
-      <div class="name" style="margin-bottom:8px">Zonas de ritmo</div>
+      <div class="name" style="margin-bottom:10px">Zonas de ritmo</div>
       <div class="zones">${zones}</div>
     </div>
-    <div class="row between" style="margin:22px 0 10px">
+    <div class="row between" style="margin:24px 0 10px">
       <h2 style="margin:0">Planilha</h2>
       <div class="seg mini">${[['lista', 'Lista'], ['grade', 'Grade']].map(([v, l]) => `<button class="${runLayout === v ? 'on' : ''}" data-action="run-layout" data-v="${v}">${l}</button>`).join('')}</div>
     </div>
@@ -982,6 +1150,18 @@ function planView(profile, sessions, today, { action = 'run-open', who = 'me' } 
       ${['pdf', 'xlsx', 'csv'].map((k) => `<button class="grow btn-small" data-action="run-export" data-kind="${k}" data-who="${who}">⬇️ ${k === 'xlsx' ? 'Excel' : k.toUpperCase()}</button>`).join('')}
     </div>
     ${meta?.dicas?.length ? `<h2>Dicas</h2><div class="card"><ul class="tips">${meta.dicas.map((t) => `<li>${esc(t)}</li>`).join('')}</ul></div>` : ''}`;
+}
+
+function nextRunCard(s, today, action) {
+  const when = s.day === today ? 'Hoje' : s.day === addDays(today, 1) ? 'Amanhã' : fmtDate(s.day, { weekday: 'long', day: '2-digit', month: 'short' });
+  return `
+    <div class="card next-run" data-action="${action}" data-id="${s.id}" role="button" tabindex="0" style="cursor:pointer">
+      <div class="kicker">Próximo treino · ${when}</div>
+      <div class="title">${esc(s.title)}</div>
+      <div class="facts">${typeChip(s.type)}${s.distanceKm ? `<span><b>${fmtNum(s.distanceKm)}</b> km</span>` : ''}${s.pace ? `<span>⏱ <b>${esc(s.pace)}</b></span>` : ''}</div>
+      ${s.description ? `<p class="muted" style="margin-top:8px">${esc(s.description)}</p>` : ''}
+      ${s.coachNote ? `<div class="note">💬 ${esc(s.coachNote)}</div>` : ''}
+    </div>`;
 }
 
 function chatView(messages, sendAction, placeholder) {
@@ -1260,18 +1440,40 @@ function myRunView(today) {
 
 function coachListView() {
   if (!coachList) { loadCoachList(); return '<div class="empty">Carregando alunos…</div>'; }
-  if (!coachList.length) return '<div class="empty">Nenhum aluno ainda. Quando alguém começar o teste ou assinar, aparece aqui.</div>';
+  if (!coachList.length) return '<div class="card empty"><div class="big">🏃</div>Nenhum aluno ainda. Quando alguém montar a planilha, aparece aqui.</div>';
   const label = (a) => (a.status === 'trial' ? `Teste · ${a.trialDaysLeft}d` : a.active ? R.plans[a.plan].name : a.status === 'pending' ? 'Pagamento pendente' : 'Inativo');
-  return coachList.map((x) => `
-    <div class="card row" data-action="coach-open" data-id="${x.id}" style="cursor:pointer">
-      ${avatar(x, 40)}
-      <div class="grow">
-        <div class="name">${esc(x.name)} ${x.unread ? `<span class="unread">${x.unread}</span>` : ''}</div>
-        <div class="muted">${x.goal ? GOALS[x.goal] : 'Sem planilha'}${x.raceDate ? ` · prova ${fmtDate(x.raceDate)}` : ''}</div>
-        <div class="muted">Últimos 28 dias: ${x.done}/${x.past} treinos${x.past ? ` (${Math.round((x.done / x.past) * 100)}%)` : ''}</div>
-      </div>
-      ${R.access.free ? '' : `<span class="chip ${x.access.active ? (x.access.plan === 'premium' ? 'on' : 'ok') : ''}">${label(x.access)}</span>`}
-    </div>`).join('');
+  const withPast = coachList.filter((x) => x.past);
+  const avg = withPast.length ? Math.round((withPast.reduce((t, x) => t + x.done / x.past, 0) / withPast.length) * 100) : null;
+  const doneSum = coachList.reduce((t, x) => t + x.done, 0);
+  const unread = coachList.reduce((t, x) => t + x.unread, 0);
+  return `
+    <div class="kpis">
+      ${tile('Alunos', coachList.length)}
+      ${tile('Adesão média', avg === null ? '—' : `${avg}<small>%</small>`, { delta: 'últimos 28 dias' })}
+      ${tile('Treinos feitos', doneSum, { delta: 'últimos 28 dias' })}
+      ${tile('Mensagens novas', unread)}
+    </div>
+    <h2>Alunos</h2>
+    ${coachList.map((x) => {
+      const pct = x.past ? Math.round((x.done / x.past) * 100) : null;
+      return `
+      <div class="card athlete" data-action="coach-open" data-id="${x.id}" role="button" tabindex="0">
+        <div class="row">
+          ${avatar(x, 40)}
+          <div class="grow">
+            <div class="name">${esc(x.name)} ${x.unread ? `<span class="unread">${x.unread}</span>` : ''}</div>
+            <div class="muted">${x.goal ? GOALS[x.goal] : 'Sem planilha'}${x.raceDate ? ` · prova ${fmtDate(x.raceDate)}` : ''}</div>
+          </div>
+          ${R.access.free ? '' : `<span class="chip ${x.access.active ? (x.access.plan === 'premium' ? 'on' : 'ok') : ''}">${label(x.access)}</span>`}
+        </div>
+        <div class="adh">
+          <span class="muted">Adesão</span>
+          <div class="bar" role="img" aria-label="Adesão ${pct ?? 0}%"><i style="width:${pct ?? 0}%"></i></div>
+          <b>${pct === null ? '—' : `${pct}%`}</b>
+        </div>
+        <div class="muted" style="margin-top:4px">${x.done} de ${x.past} treinos nos últimos 28 dias</div>
+      </div>`;
+    }).join('')}`;
 }
 
 function coachAthleteView(today) {
@@ -1325,7 +1527,7 @@ function runTodayCard(today) {
   return `
     <h2>Corrida de hoje</h2>
     <div class="card row">
-      <div class="emoji">🏃</div>
+      <div class="emoji" aria-hidden="true">🏃</div>
       <div class="grow" data-action="run-open" data-id="${s.id}" style="cursor:pointer">
         <div class="name">${esc(s.title)}</div>
         <div class="muted">${typeChip(s.type)} ${s.distanceKm ? `${fmtNum(s.distanceKm)} km` : ''} ${s.pace ? `· ${esc(s.pace)}` : ''}</div>
@@ -1354,7 +1556,7 @@ function openRunSession(s) {
     <div class="actions"><button value="cancel" formnovalidate>Fechar</button><button class="btn-primary" value="ok">Salvar</button></div>`, {
     onSubmit(f) {
       Object.assign(s, { done: f.get('done') === 'on', actualKm: f.get('actualKm'), actualTime: f.get('actualTime').trim(), rpe: Number(f.get('rpe')), feedback: f.get('feedback').trim() });
-      if (s.done) toast('Corrida registrada! 🏃');
+      if (s.done) { toast('Corrida registrada! 🏃'); haptic([30, 60, 30]); celebrate('big'); }
       save(runApi(`sessions/${s.id}`, { method: 'PUT', body: s }));
     },
   });
@@ -1490,7 +1692,7 @@ async function handleRunAction(d, t) {
 document.querySelector('.tabs').addEventListener('click', (ev) => {
   const b = ev.target.closest('button[data-tab]');
   if (!b) return;
-  tab = b.dataset.tab; store.set('tab', tab);
+  tab = b.dataset.tab; store.set('tab', tab); enterAnim = true;
   document.querySelectorAll('.tabs button').forEach((x) => x.classList.toggle('active', x === b));
   render(); window.scrollTo(0, 0);
 });
@@ -1506,6 +1708,7 @@ $view.addEventListener('click', (ev) => {
   switch (d.action) {
     case 'toggle': {
       const e = myChecks(c)[d.day];
+      if (!dayDone(c, e)) { haptic(15); popSel = `[data-pop="c-${c.id}"]`; celebrate('small', t.getBoundingClientRect()); }
       if (dayDone(c, e) && !e.note && !e.photo) removeCheck(c, d.day);
       else if (dayDone(c, e)) setCheck(c, d.day, { ...e, value: 0 });
       else setCheck(c, d.day, { value: 1, note: e?.note || '', photo: e?.photo || null });
@@ -1516,6 +1719,11 @@ $view.addEventListener('click', (ev) => {
       const log = getOrCreateLog(d.day, w);
       const s = log.exercises[d.e].sets[d.s];
       s.done = !s.done;
+      if (s.done) {
+        haptic(12);
+        popSel = `[data-pop="s-${w.id}-${d.e}-${d.s}"]`;
+        if (log.exercises.every((x) => x.sets.every((y) => y.done))) stopRest(); else startRest();
+      }
       return save(saveLog(log));
     }
     case 'set-add': case 'set-remove': {
@@ -1536,10 +1744,17 @@ $view.addEventListener('click', (ev) => {
         if (anyFinished) mine[d.day] ||= { value: 1, note: '', photo: null };
         else if (mine[d.day] && !mine[d.day].note && !mine[d.day].photo) delete mine[d.day];
       });
-      if (log.finished) toast('Treino concluído! 💪');
+      if (log.finished) { toast('Treino concluído! 💪'); stopRest(); haptic([30, 60, 30]); celebrate('big'); }
       return save(saveLog(log, true));
     }
     case 'chart': return openChart(d.name);
+    case 'rest-cycle': {
+      const opts = [60, 90, 120, 180];
+      const next = opts[(opts.indexOf(restDefault()) + 1) % opts.length];
+      setRestDefault(next); toast(`⏱ Descanso entre séries: ${next}s`);
+      return render();
+    }
+    case 'rest-set': setRestDefault(Number(d.v)); return render();
     case 'new-challenge': return openChallengeForm();
     case 'edit-challenge': return openChallengeForm(c);
     case 'invite': return openInvite(c);
@@ -1585,20 +1800,38 @@ $view.addEventListener('change', (ev) => {
 function showLogin(message = '') {
   S = null;
   document.body.classList.add('logged-out');
-  $('#title').textContent = 'Desafios & Treinos';
+  $('#title').textContent = '';
+  $('#hello').textContent = '';
   $('#today').textContent = '';
   const invite = store.get('pending-invite');
   $view.innerHTML = `
     <div class="login">
-      <div class="logo">🏆</div>
-      <h2 style="text-transform:none;letter-spacing:0;color:var(--text);font-size:22px">Desafios & Treinos</h2>
-      <p class="muted">Desafios com os amigos, treinos do dia e contagem de cada dia.</p>
-      ${invite ? '<p class="chip on" style="display:inline-block">Você recebeu um convite! Entre para participar.</p>' : ''}
+      <div class="orbit" aria-hidden="true">
+        <svg viewBox="0 0 150 150">
+          <defs>
+            <linearGradient id="lg-sun" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#8b5cf6"/><stop offset=".55" stop-color="#ec4899"/><stop offset="1" stop-color="#f59e0b"/></linearGradient>
+            <radialGradient id="lg-glow" cx=".5" cy=".5" r=".5"><stop offset="0" stop-color="#8b5cf6" stop-opacity=".5"/><stop offset="1" stop-color="#8b5cf6" stop-opacity="0"/></radialGradient>
+          </defs>
+          <circle cx="75" cy="75" r="72" fill="url(#lg-glow)"/>
+          <g class="spin"><ellipse cx="75" cy="75" rx="66" ry="24" fill="none" stroke="url(#lg-sun)" stroke-width="3" opacity=".7" transform="rotate(-24 75 75)"/><circle cx="135" cy="50" r="6" fill="#f59e0b"/></g>
+          <circle cx="75" cy="75" r="38" fill="none" stroke="url(#lg-sun)" stroke-width="9"/>
+          <path d="M60 76l11 11 21-24" fill="none" stroke="currentColor" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </div>
+      <h2 class="grad-text">Desafios & Treinos</h2>
+      <p class="tag">Desafios com os amigos, treino do dia e planilha de corrida. Tudo num app só, com o astral lá em cima.</p>
+      ${invite ? '<p class="chip on" style="display:inline-block;margin-top:14px">Você recebeu um convite! Entre para participar.</p>' : ''}
       <button class="btn-google" id="google-login">
         <svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.4-.4-3.5z"/><path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/><path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-7.9l-6.5 5C9.5 39.6 16.2 44 24 44z"/><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.2 5.2C37 39.2 44 34 44 24c0-1.3-.1-2.4-.4-3.5z"/></svg>
         Entrar com Google
       </button>
-      ${message ? `<p class="muted">⚠️ ${esc(message)}</p>` : ''}
+      ${message ? `<p class="muted" style="margin-top:12px">⚠️ ${esc(message)}</p>` : ''}
+      <div class="feat">
+        <div><span>🎯</span>Desafios de 21 dias, metas e ranking com amigos</div>
+        <div><span>🏋️</span>Treino do dia com carga por série e timer de descanso</div>
+        <div><span>🏃</span>Planilha de corrida com ritmos e evolução</div>
+        <div><span>🌌</span>Energia, níveis e conquistas a cada dia marcado</div>
+      </div>
     </div>`;
   $('#google-login').onclick = () => {
     try { oauthLogin('google'); } catch (e) { showLogin(e.message); }
@@ -1652,6 +1885,7 @@ async function start() {
   if (invite) { store.del('pending-invite'); openJoin(invite); } else offerLocalImport();
 }
 
+initTooltips();
 $view.innerHTML = '<div class="empty">Carregando…</div>';
 start();
 

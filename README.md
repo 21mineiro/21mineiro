@@ -30,10 +30,23 @@ App (PWA) para acompanhar desafios com amigos e treinos de academia, feito para 
     (`netlify/functions/plan-bg.mts`). Sem chave da IA (opcional), ou se ela falhar, usa o gerador próprio no mesmo método, sem custo (`netlify/lib/running-plan.mts`).
   - Visão em lista ou grade semana × dia, download em PDF, Excel e CSV.
 
+## Visual "Astral"
+
+- Fundo de aurora, cartões de vidro, gradiente alto astral e fonte Space Grotesk (embutida no app).
+- Tema claro, escuro ou automático; respeita "reduzir movimento" do celular.
+- **Hoje:** anel do dia (tarefas feitas), maior sequência, nível de energia, conquistas e frase do dia (ditados populares).
+- **Energia e níveis:** cada dia marcado, treino e corrida soma energia (Faísca → Chama → Cometa → … → Lenda Astral).
+- **Painéis:** indicadores com minigráficos, mapa de calor ("constelação") das últimas 16 semanas, atividades por semana,
+  volume de corrida planejado × feito, evolução de carga com toque no gráfico e "Ver dados" em tabela.
+- **Treino:** timer de descanso entre séries (60/90/120/180 s), vibração e confete ao concluir.
+- **Treinador:** indicadores (alunos, adesão média, treinos feitos, mensagens) e barra de adesão por aluno.
+- Cores dos gráficos validadas para daltonismo e contraste (violeta, ciano, laranja; rampa violeta no mapa de calor).
+
 ## Estrutura
 
 ```
 src/                         front-end (HTML, CSS, JS) → build gera dist/
+src/ui.js                    gráficos, confete, timer de descanso, níveis e frases
 netlify/functions/api.mts    API (/api/*)
 netlify/functions/reminders.mts  lembretes (roda toda hora)
 netlify/database/migrations  tabelas do banco
