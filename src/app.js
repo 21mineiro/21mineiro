@@ -186,6 +186,57 @@ function getOrCreateLog(day, w) {
 
 const saveLog = (log, syncChallenges = false) => api('logs', { method: 'PUT', body: { ...log, syncChallenges } });
 
+// Recordes pessoais: maior carga já feita em cada exercício (séries feitas, sem contar o dia `skipDay`)
+const FEEL = { 1: ['😌', 'Fácil'], 2: ['🙂', 'Ok'], 3: ['🥵', 'Pesado'] };
+function personalRecords(skip = null) {
+  const best = {};
+  for (const l of S.logs) {
+    for (const e of l.exercises) {
+      if (e.unit === 'seg') continue;
+      for (const st of e.sets) {
+        if (!(st.done || l.finished)) continue;
+        if (skip && l.day === skip.day && l.workoutId === skip.workoutId) continue;
+        const kg = Number(st.weight) || 0;
+        if (kg <= 0) continue;
+        const k = e.name.trim().toLowerCase();
+        if (!best[k] || kg > best[k].kg || (kg === best[k].kg && l.day < best[k].day)) best[k] = { name: e.name, kg, day: l.day, reps: Number(st.reps) || 0 };
+      }
+    }
+  }
+  return best;
+}
+
+// Ao marcar uma série: se passou da maior carga anterior, comemora
+function checkRecord(log, ex, set) {
+  if (ex.unit === 'seg' || !(Number(set.weight) > 0)) return;
+  const prev = personalRecords({ day: log.day, workoutId: log.workoutId })[ex.name.trim().toLowerCase()];
+  if (!prev || Number(set.weight) <= prev.kg) return;
+  if ((ex.prDone || 0) >= Number(set.weight)) return; // já comemorou essa carga hoje
+  ex.prDone = Number(set.weight);
+  celebrate('big'); haptic([20, 40, 20]);
+  toast(`🏆 Recorde pessoal! ${ex.name}: ${fmtNum(Number(set.weight))} kg (antes ${fmtNum(prev.kg)} kg)`, 3500);
+}
+
+// Avaliação ao concluir o treino
+function askFeeling(log) {
+  openModal(`
+    <h3>Como foi o treino?</h3>
+    <p class="muted" style="margin-top:-6px">Seu treinador vê sua resposta.</p>
+    <div class="feel-pick">
+      ${Object.entries(FEEL).map(([k, [ico, label]]) => `<label class="feel"><input type="radio" name="level" value="${k}" ${log.feeling?.level === Number(k) ? 'checked' : ''}><span>${ico}</span><b>${label}</b></label>`).join('')}
+    </div>
+    <label class="field">Recado (opcional)<textarea name="note" rows="2" maxlength="280" placeholder="Ex: senti o ombro no supino">${esc(log.feeling?.note || '')}</textarea></label>
+    <div class="actions"><button value="cancel" formnovalidate>Pular</button><button class="btn-primary" value="ok">Enviar</button></div>`, {
+    onSubmit(f) {
+      const level = Number(f.get('level'));
+      if (!level) { toast('Escolha fácil, ok ou pesado'); return false; }
+      log.feeling = { level, note: String(f.get('note') || '').trim() };
+      save(saveLog(log));
+      toast('Valeu! Avaliação enviada ✅');
+    },
+  });
+}
+
 // Maior carga feita em cada dia, por exercício (para o gráfico)
 function exerciseHistory(name) {
   const key = name.trim().toLowerCase();
@@ -915,6 +966,7 @@ function coachUserView() {
       <button class="btn-primary grow" data-action="tr-new">+ Montar treino</button>
       <button class="grow" data-action="tr-apply">📋 Usar programa pronto</button>
     </div>
+    ${x.workouts.length ? `<button class="btn-block" data-action="tr-copy" style="margin-bottom:6px">Copiar este treino para outros alunos</button>` : ''}
     ${!hasCoach && x.workouts.length ? `<p class="muted" style="text-align:center">Os treinos acima foram escolhidos por ${esc(firstName(x.user.name))}. Ao montar um treino para ela, eles são substituídos.</p>` : ''}
 
     <h2>O que treinou · 90 dias</h2>
@@ -924,6 +976,7 @@ function coachUserView() {
           <div class="name">${esc(l.workoutName)}</div>
           <span class="chip ${l.finished ? 'ok' : ''}">${l.finished ? '✓ Concluído' : 'parcial'}</span>
         </div>
+        ${l.feeling ? `<div class="feel-chip lv${l.feeling.level}">${FEEL[l.feeling.level][0]} ${FEEL[l.feeling.level][1]}${l.feeling.note ? ` · “${esc(l.feeling.note)}”` : ''}</div>` : ''}
         <div class="muted" style="margin-bottom:6px">${fmtDate(l.day, { weekday: 'short', day: '2-digit', month: 'short' })}${l.cardio?.done ? ` · 🫀 ${l.cardio.minutes} min${l.cardio.type ? ` de ${esc(l.cardio.type.toLowerCase())}` : ''}` : ''}</div>
         ${l.exercises.map((e) => `<div class="muted">${e.sets.every((s) => s.done) ? '✅' : '⬜'} ${esc(e.name)} — ${e.sets.map((s) => (e.unit === 'seg' ? `${s.reps}s` : `${s.reps}×${fmtNum(s.weight)}`)).join(' · ')}${e.unit === 'seg' ? '' : ' kg'}</div>`).join('')}
       </div>`).join('') : '<div class="card empty">Nenhum treino registrado ainda.</div>'}`;
@@ -946,6 +999,34 @@ async function coachNewWorkout() {
     render();
   }
   openWorkoutForm(null, coachCtx());
+}
+
+// Copia o treino do aluno aberto para outros alunos escolhidos
+async function coachCopyWorkouts() {
+  let list = coachUsers;
+  if (!list) { try { list = coachUsers = await api(`coach/users?today=${todayStr()}`); } catch (e) { return toast(`⚠️ ${e.message}`); } }
+  const from = coachUser.user;
+  const others = list.filter((u) => u.id !== from.id && u.id !== myId() && !(S.me.owner && u.owner));
+  if (!others.length) return toast('Você ainda não tem outros alunos');
+  openModal(`
+    <h3>Copiar treino de ${esc(firstName(from.name))}</h3>
+    <p class="muted" style="margin-top:-6px">${coachUser.workouts.length} ${coachUser.workouts.length === 1 ? 'treino' : 'treinos'}: ${esc(coachUser.workouts.map((w) => w.name).join(', '))}. O treino atual de quem você marcar será substituído.</p>
+    <label class="check-row"><input type="checkbox" data-m="all"> Marcar todos (${others.length})</label>
+    <div class="copy-list">
+      ${others.map((u) => `<label class="check-row"><input type="checkbox" name="to" value="${esc(u.id)}"> ${esc(u.name)} <span class="muted" style="margin-left:auto">${planLabel(u.kinds, u.nworkouts)}</span></label>`).join('')}
+    </div>
+    <div class="actions"><button value="cancel" formnovalidate>Cancelar</button><button class="btn-primary" value="ok">Copiar</button></div>`, {
+    onClick(ev) {
+      if (ev.target.dataset.m === 'all') $form.querySelectorAll('input[name=to]').forEach((c) => { c.checked = ev.target.checked; });
+    },
+    onSubmit(f) {
+      const toIds = f.getAll('to');
+      if (!toIds.length) { toast('Marque pelo menos um aluno'); return false; }
+      api('coach/copy', { method: 'POST', body: { fromId: from.id, toIds } })
+        .then((r) => { toast(`Treino copiado para ${r.copied} ${r.copied === 1 ? 'aluno' : 'alunos'} ✅`); coachUsers = null; })
+        .catch((e) => toast(`⚠️ ${e.message}`));
+    },
+  });
 }
 
 function coachApplyProgram() {
@@ -1092,6 +1173,14 @@ function viewProfile() {
         <div class="xp-txt">${fmtNum(xp)} de energia${lv.next ? ` · faltam ${fmtNum(lv.toNext)} para ${lv.next.icon} ${lv.next.name}` : ' · nível máximo!'}</div>
       </div>
     </div>
+
+    ${(() => {
+      const prs = Object.values(personalRecords()).sort((a, b) => (a.day < b.day ? 1 : -1)).slice(0, 8);
+      return prs.length ? `<h2>Recordes pessoais</h2>
+      <div class="card pr-list">${prs.map((r) => `
+        <div class="pr-row"><span class="grow"><b>${esc(r.name)}</b><small>${fmtDate(r.day, { day: '2-digit', month: 'short' })}${r.reps ? ` · ${r.reps} reps` : ''}</small></span><span class="pr-kg">${fmtNum(r.kg)}<small> kg</small></span></div>`).join('')}
+      </div>` : '';
+    })()}
 
     <h2>Últimos 30 dias</h2>
     <div class="kpis">
@@ -2288,6 +2377,7 @@ $view.addEventListener('click', (ev) => {
       s.done = !s.done;
       if (s.done) {
         haptic(12);
+        checkRecord(log, log.exercises[d.e], s);
         popSel = `[data-pop="s-${w.id}-${d.e}-${d.s}"]`;
         if (log.exercises.every((x) => x.sets.every((y) => y.done))) stopRest(); else startRest();
       }
@@ -2312,7 +2402,9 @@ $view.addEventListener('click', (ev) => {
         else if (mine[d.day] && !mine[d.day].note && !mine[d.day].photo) delete mine[d.day];
       });
       if (log.finished) { toast('Treino concluído! 💪'); stopRest(); haptic([30, 60, 30]); celebrate('big'); }
-      return save(saveLog(log, true));
+      const saving = save(saveLog(log, true));
+      if (log.finished && !log.feeling) setTimeout(() => askFeeling(log), 900);
+      return saving;
     }
     case 'chart': return openChart(d.name);
     case 'cardio-done': {
@@ -2328,6 +2420,7 @@ $view.addEventListener('click', (ev) => {
     case 'tr-new': return coachNewWorkout();
     case 'tr-edit': return openWorkoutForm(coachUser.workouts.find((x) => x.id === d.id), coachCtx());
     case 'tr-apply': return coachApplyProgram();
+    case 'tr-copy': return coachCopyWorkouts();
     case 'tr-mode': coachMode = d.v; store.set('coach-mode', coachMode); coachUsers = null; return render();
     case 'tr-pick': return openPickAthletes(d.v);
     case 'tr-invite': return openCoachInvite();

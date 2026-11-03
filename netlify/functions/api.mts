@@ -65,7 +65,7 @@ async function getState(me: Me) {
 
   const workouts = await sql`SELECT id, name, weekdays, exercises FROM workouts WHERE user_id = ${me.id} ORDER BY position, created_at`;
   const logs = await sql`
-    SELECT to_char(day, 'YYYY-MM-DD') AS day, workout_id, workout_name, finished, exercises, cardio
+    SELECT to_char(day, 'YYYY-MM-DD') AS day, workout_id, workout_name, finished, exercises, cardio, feeling
     FROM workout_logs WHERE user_id = ${me.id} ORDER BY day DESC`;
 
   return {
@@ -86,7 +86,14 @@ async function getState(me: Me) {
   };
 }
 
-const logOut = (l: any) => ({ day: l.day, workoutId: l.workout_id, workoutName: l.workout_name, finished: l.finished, exercises: l.exercises, cardio: l.cardio || null });
+const logOut = (l: any) => ({ day: l.day, workoutId: l.workout_id, workoutName: l.workout_name, finished: l.finished, exercises: l.exercises, cardio: l.cardio || null, feeling: l.feeling || null });
+
+// Avaliação do treino: nível 1 (fácil), 2 (ok), 3 (pesado) e recado curto
+function feelingIn(f: any) {
+  const level = Number(f?.level);
+  if (![1, 2, 3].includes(level)) return null;
+  return { level, note: String(f.note || '').trim().slice(0, 280) };
+}
 
 // Cardio: feito ou não, minutos e tipo
 function cardioIn(c: any) {
@@ -389,10 +396,10 @@ export default async (req: Request, context: Context) => {
       const { day, workoutId } = body;
       if (!isDay(day) || !workoutId) return err('Dados inválidos');
       await sql`
-        INSERT INTO workout_logs (user_id, day, workout_id, workout_name, finished, exercises, cardio, updated_at)
-        VALUES (${me.id}, ${day}, ${workoutId}, ${String(body.workoutName || '').slice(0, 80)}, ${!!body.finished}, ${JSON.stringify(body.exercises || [])}::jsonb, ${JSON.stringify(cardioIn(body.cardio))}::jsonb, NOW())
+        INSERT INTO workout_logs (user_id, day, workout_id, workout_name, finished, exercises, cardio, feeling, updated_at)
+        VALUES (${me.id}, ${day}, ${workoutId}, ${String(body.workoutName || '').slice(0, 80)}, ${!!body.finished}, ${JSON.stringify(body.exercises || [])}::jsonb, ${JSON.stringify(cardioIn(body.cardio))}::jsonb, ${JSON.stringify(feelingIn(body.feeling))}::jsonb, NOW())
         ON CONFLICT (user_id, day, workout_id) DO UPDATE
-        SET workout_name = EXCLUDED.workout_name, finished = EXCLUDED.finished, exercises = EXCLUDED.exercises, cardio = EXCLUDED.cardio, updated_at = NOW()`;
+        SET workout_name = EXCLUDED.workout_name, finished = EXCLUDED.finished, exercises = EXCLUDED.exercises, cardio = EXCLUDED.cardio, feeling = EXCLUDED.feeling, updated_at = NOW()`;
       if (body.syncChallenges) await syncWorkoutChallenges(me.id, day);
       return json({ ok: true });
     }
@@ -446,7 +453,7 @@ export default async (req: Request, context: Context) => {
         u.coach = (await roleOf(u.email)).coach; u.owner = isCoach(u.email || '');
         const workouts = await sql`SELECT id, name, weekdays, exercises FROM workouts WHERE user_id = ${sid} ORDER BY position, created_at`;
         const logs = await sql`
-          SELECT to_char(day, 'YYYY-MM-DD') AS day, workout_id, workout_name, finished, exercises, cardio
+          SELECT to_char(day, 'YYYY-MM-DD') AS day, workout_id, workout_name, finished, exercises, cardio, feeling
           FROM workout_logs WHERE user_id = ${sid} AND day > ${today}::date - 90 ORDER BY day DESC`;
         return json({ user: u, workouts: workouts.map((w: any) => ({ id: w.id, name: w.name, weekdays: w.weekdays, exercises: w.exercises })), logs: logs.map(logOut) });
       }
@@ -502,6 +509,27 @@ export default async (req: Request, context: Context) => {
         return json({ ok: true });
       }
       // Apagar treinos de um aluno (para trocar pelo treino do treinador)
+      // Copiar o treino de um aluno para outros (substitui o treino deles)
+      if (sub === 'copy' && method === 'POST') {
+        const fromId = String(body.fromId || '');
+        const toIds = (Array.isArray(body.toIds) ? body.toIds : []).map(String).filter((t: string) => t && t !== fromId).slice(0, 200);
+        if (!fromId || !toIds.length) return err('Escolha para quem copiar');
+        if (!(await canSee(fromId))) return err('Este aluno não é seu', 403);
+        const src = await sql`SELECT name, weekdays, exercises, position FROM workouts WHERE user_id = ${fromId} ORDER BY position, created_at`;
+        if (!src.length) return err('Esse aluno ainda não tem treino');
+        let n = 0;
+        for (const to of toIds) {
+          if (!(await canSee(to))) continue;
+          await sql`DELETE FROM workouts WHERE user_id = ${to}`;
+          for (const [i, w] of src.entries()) {
+            const ex = (w.exercises || []).map((e: any) => ({ ...e, id: rid() }));
+            await sql`INSERT INTO workouts (id, user_id, name, weekdays, exercises, position)
+              VALUES (${'co-cp-' + rid().slice(0, 13)}, ${to}, ${w.name}, ${JSON.stringify(w.weekdays)}::jsonb, ${JSON.stringify(ex)}::jsonb, ${i})`;
+          }
+          n++;
+        }
+        return json({ copied: n });
+      }
       if (sub === 'workouts' && sid && method === 'DELETE') {
         const [w] = await sql`SELECT user_id FROM workouts WHERE id = ${sid}`;
         if (w && !(await canSee(w.user_id))) return err('Este aluno não é seu', 403);

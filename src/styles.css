@@ -829,3 +829,26 @@ a.btn { text-decoration: none; display: inline-block; }
 .mcal i.void { background: transparent; }
 .mcal i.today { outline: 2px solid var(--text); outline-offset: 1px; }
 .mcal i:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.copy-list { max-height: 46vh; overflow-y: auto; margin: 4px 0 8px; border-top: 1px solid var(--line); }
+.copy-list .check-row { padding: 8px 2px; margin: 0; border-bottom: 1px solid var(--line); font-weight: 500; }
+
+/* Avaliação do treino */
+.feel-pick { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 6px 0 12px; }
+.feel { display: grid; place-items: center; gap: 4px; padding: 12px 6px; border-radius: 14px; border: 1.5px solid var(--line); background: var(--surface-2); cursor: pointer; }
+.feel input { position: absolute; opacity: 0; pointer-events: none; }
+.feel span { font-size: 28px; line-height: 1; }
+.feel b { font-size: 13px; }
+.feel:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
+.feel-chip { display: inline-block; font-size: 13px; padding: 4px 10px; border-radius: 10px; margin: 2px 0 8px; background: var(--surface-2); }
+.feel-chip.lv3 { background: var(--bad-soft); }
+.feel-chip.lv1 { background: var(--good-soft); }
+
+/* Recordes pessoais */
+.pr-list { padding: 4px 16px; }
+.pr-row { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.pr-row:last-child { border-bottom: 0; }
+.pr-row b { display: block; font-weight: 600; font-size: 14px; }
+.pr-row small { color: var(--muted); }
+.pr-kg { font-size: 20px; font-weight: 700; color: var(--accent); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pr-kg small { font-size: 12px; color: var(--muted); font-weight: 500; }
