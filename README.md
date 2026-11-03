@@ -1,29 +1,44 @@
 # Desafios & Treinos
 
-App simples (PWA) para acompanhar desafios e treinos de academia, feito para usar no celular.
+App (PWA) para acompanhar desafios com amigos e treinos de academia, feito para usar no celular.
 
-## O que faz
+## Funcionalidades
 
-- **Desafios** – crie desafios como "20 dias sem açúcar" ou "21 dias de academia". O app conta:
-  dia atual do desafio, dias feitos, quantos faltam, sequência (🔥) e falhas. Calendário para marcar/desmarcar qualquer dia passado.
-- **Treinos** – cadastre treinos (A, B, C…) com exercícios (séries, reps, carga) e os dias da semana de cada um.
-- **Hoje** – mostra os desafios ativos para marcar e o treino do dia. Marque cada exercício feito e ajuste
-  séries/reps/kg na hora; o ajuste fica salvo para o próximo treino. Ao "Concluir treino", desafios com
-  a opção *marcar automaticamente* recebem o check do dia.
-- **Histórico** – todos os treinos registrados, totais, e backup (exportar/importar arquivo JSON).
+- **Login com Google** (Netlify Identity) e dados na nuvem (Netlify Database / Postgres).
+- **Desafios** de três tipos:
+  - *Todo dia* — fiz / não fiz (ex.: 20 dias sem açúcar).
+  - *Quantidade por dia* — meta com unidade (ex.: 2 L de água).
+  - *Vezes por semana* — ex.: correr 3x por semana.
+  Contagem de dias feitos, quantos faltam, sequência 🔥, falhas e calendário.
+- **Anotação e foto** em qualquer dia (fotos no Netlify Blobs, visíveis só para participantes).
+- **Desafios em grupo**: convite por código/link, ranking e quem já marcou hoje.
+- **Treinos**: treinos por dia da semana, carga e repetições **por série**. O próximo treino já vem
+  com as cargas do último. Concluir o treino marca os desafios ligados à academia.
+- **Gráfico de evolução** da carga por exercício.
+- **Conquistas** (sequências, treinos, recordes…).
+- **Lembrete diário** por notificação (no iPhone: app adicionado à Tela de Início, iOS 16.4+).
+- **Tema** claro, escuro ou automático.
 
-## Dados
+## Estrutura
 
-Ficam salvos no próprio aparelho (`localStorage`). Use **Exportar** no Histórico para fazer backup ou levar para outro celular.
+```
+src/                         front-end (HTML, CSS, JS) → build gera dist/
+netlify/functions/api.mts    API (/api/*)
+netlify/functions/reminders.mts  lembretes (roda toda hora)
+netlify/database/migrations  tabelas do banco
+```
 
-## Como usar
+## Configuração na Netlify
 
-Não precisa instalar nada nem compilar. Basta publicar a pasta em qualquer hospedagem estática
-(GitHub Pages, Netlify, Vercel) e abrir no celular. No navegador, use "Adicionar à tela inicial" para ter como app.
+1. **Identity**: em *Project configuration → Identity*, clique em *Enable Identity* e, em
+   *Registration → External providers*, adicione **Google**.
+2. **Variáveis de ambiente** (para notificações): `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT`
+   (gere com `npx web-push generate-vapid-keys`).
+3. O banco é criado sozinho no deploy (pacote `@netlify/database`) e as migrações são aplicadas automaticamente.
 
-Para testar no computador:
+## Desenvolvimento
 
 ```bash
-python3 -m http.server 8000
-# abra http://localhost:8000
+npm install
+npm run build
 ```
