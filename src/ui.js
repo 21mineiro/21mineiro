@@ -265,7 +265,7 @@ export function haptic(pattern = 12) {
   try { navigator.vibrate?.(pattern); } catch { /* sem suporte */ }
 }
 
-const CONFETTI = ['#8b5cf6', '#ec4899', '#f59e0b', '#22d3ee', '#a3e635', '#ffffff'];
+const CONFETTI = ['#16a34a', '#22c55e', '#86efac', '#facc15', '#2563eb', '#ffffff'];
 export function celebrate(size = 'small', origin = null) {
   if (reduceMotion()) return;
   const cv = document.createElement('canvas');

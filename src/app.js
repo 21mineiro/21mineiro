@@ -47,7 +47,7 @@ function applyTheme() {
   if (t === 'auto') document.documentElement.removeAttribute('data-theme');
   else document.documentElement.setAttribute('data-theme', t);
   const dark = t === 'dark' || (t === 'auto' && matchMedia('(prefers-color-scheme: dark)').matches);
-  $('meta[name=theme-color]').setAttribute('content', dark ? '#0a0a1f' : '#f5f3ff');
+  $('meta[name=theme-color]').setAttribute('content', dark ? '#0f1412' : '#f4f5f7');
 }
 applyTheme();
 matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', applyTheme);
@@ -438,15 +438,16 @@ function heroToday(today) {
   const streak = Math.max(0, ...S.challenges.filter(isActive).map((c) => challengeStats(c).streak));
   const badges = computeBadges();
   const got = badges.filter((b) => b.ok).length;
+  const active30 = [...activityByDay().keys()].filter((d) => d <= today && diffDays(d, today) < 30).length;
   const [q, src] = quoteOfDay(today);
   const sub = !t.total ? 'dia livre' : t.done === t.total ? 'dia completo! 🎉' : 'feitos hoje';
   return `
     <div class="card hero">
       ${ring({ value: t.done, max: t.total || 1, center: t.total ? `${t.done}/${t.total}` : '☀️', sub, label: `${t.done} de ${t.total} tarefas de hoje feitas` })}
       <div class="hero-stats">
-        <div class="hero-stat"><span class="ico">🔥</span><div><b>${streak} ${streak === 1 ? 'dia' : 'dias'}</b><small>maior sequência ativa</small></div></div>
-        <div class="hero-stat"><span class="ico">${lv.icon}</span><div><b>Nível ${lv.n} · ${lv.name}</b><small>${fmtNum(xp)} de energia</small></div></div>
-        <div class="hero-stat"><span class="ico">🏅</span><div><b>${got} de ${badges.length}</b><small>conquistas</small></div></div>
+        <div class="hero-stat"><span class="ico"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3c1 3.5 4.5 5 4.5 9.5A4.5 4.5 0 0 1 12 17a4.5 4.5 0 0 1-4.5-4.5c0-2 1-3.2 2-4 .2 1.6 1 2.5 2 2.8C11 9 11.2 5.6 12 3Z"/><path d="M8 20h8"/></svg></span><div><b>${streak} ${streak === 1 ? 'dia' : 'dias'}</b><small>sequência ativa</small></div></div>
+        <div class="hero-stat"><span class="ico"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg></span><div><b>${active30} de 30</b><small>dias ativos no mês</small></div></div>
+        <div class="hero-stat"><span class="ico"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 4h10v4.5a5 5 0 0 1-10 0V4Z"/><path d="M7 6H4.5v1.5A3.5 3.5 0 0 0 8 11M17 6h2.5v1.5A3.5 3.5 0 0 1 16 11M12 13.5V17M8.5 20.5h7"/></svg></span><div><b>${got} de ${badges.length}</b><small>conquistas</small></div></div>
       </div>
       <div class="quote">${esc(q)}<small>${esc(src)}</small></div>
     </div>`;
