@@ -238,12 +238,11 @@ export default async (req: Request, context: Context) => {
       return json({ ok: true });
     }
 
-    // Catálogo de exercícios: treinadores cadastram/editam, só o dono apaga
+    // Catálogo de exercícios: treinadores cadastram, editam e apagam
     if (res === 'exercises' && id && (method === 'PUT' || method === 'DELETE')) {
       const role = await roleOf(me.email);
       if (!role.coach) return err('Só treinadores mexem na lista de exercícios', 403);
       if (method === 'DELETE') {
-        if (!role.owner) return err('Só o dono pode apagar exercícios', 403);
         await sql`DELETE FROM exercises WHERE id = ${id}`;
         return json({ ok: true });
       }

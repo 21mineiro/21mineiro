@@ -762,7 +762,7 @@ function openCatalogItem(item) {
     ${item.video ? `<p><a href="${esc(item.video)}" target="_blank" rel="noopener">▶ Testar o vídeo</a></p>` : ''}
     ${isNew ? '' : '<p class="muted">Se mudar o nome, os treinos que já usam este exercício são atualizados.</p>'}
     <div class="actions">
-      ${!isNew && S.me.owner ? '<button type="button" class="btn-danger" data-m="delete">Apagar</button>' : ''}
+      ${!isNew ? '<button type="button" class="btn-danger" data-m="delete">Apagar</button>' : ''}
       <button value="cancel" formnovalidate>Cancelar</button>
       <button class="btn-primary" value="ok">Salvar</button>
     </div>`, {
