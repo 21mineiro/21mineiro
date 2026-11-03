@@ -1,6 +1,6 @@
 // Cache para o app abrir sem internet + notificações
-const CACHE = 'desafios-v3';
-const FILES = ['/', '/index.html', '/styles.css', '/app.js', '/manifest.json', '/icon.svg', '/icon-192.png', '/fonts/space-grotesk.woff2'];
+const CACHE = 'desafios-v4';
+const FILES = ['/', '/index.html', '/styles.css', '/app.js', '/manifest.json', '/icon.svg', '/icon-192.png', '/favicon.svg', '/fonts/space-grotesk.woff2'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(FILES)));

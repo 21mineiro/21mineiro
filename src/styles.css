@@ -893,3 +893,8 @@ a.btn { text-decoration: none; display: inline-block; }
 .sum-banner { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; border: 1.5px solid var(--accent); background: var(--accent-soft); color: var(--text); font: inherit; }
 .sum-banner b { display: block; font-size: 15px; }
 .sum-banner small { display: block; color: var(--muted); margin-top: 2px; }
+
+/* Sem internet */
+.net-pill { position: fixed; z-index: 30; left: 50%; transform: translateX(-50%); top: calc(8px + env(safe-area-inset-top));
+  font-size: 12px; font-weight: 700; padding: 6px 12px; border-radius: 99px; background: var(--warn); color: #1a1205; box-shadow: 0 4px 14px rgba(0,0,0,.18); white-space: nowrap; }
+.net-pill[hidden] { display: none; }

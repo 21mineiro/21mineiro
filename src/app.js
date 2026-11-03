@@ -57,15 +57,68 @@ matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', applyThe
 // Em desenvolvimento local (netlify dev) o login do Google não funciona; usa um usuário de teste.
 const DEV_USER = location.hostname === 'localhost' ? store.get('dev-user') : null;
 
-async function api(path, { method = 'GET', body, raw, retry = true } = {}) {
+/* ---------- Sem internet: fila de alterações ----------
+   Marcar séries, treinos, desafios e medidas funciona sem sinal: a alteração fica guardada
+   no celular e é enviada sozinha quando a internet volta. */
+const QUEUEABLE = /^(logs|checkins|measures)(\?|$)/;
+const outbox = { get: () => store.get('outbox', []), set: (q) => store.set('outbox', q) };
+function enqueue(path, method, body) {
+  let q = outbox.get();
+  // vários salvamentos do mesmo treino do dia: fica só o último
+  if (path === 'logs' && method === 'PUT') q = q.filter((x) => !(x.path === 'logs' && x.method === 'PUT' && x.body?.day === body?.day && x.body?.workoutId === body?.workoutId));
+  q.push({ path, method, body, at: Date.now() });
+  outbox.set(q);
+  // guarda a tela atual (já com a alteração) para reabrir o app sem internet
+  try { if (S) localStorage.setItem('state-cache', JSON.stringify(S)); } catch { /* sem espaço */ }
+  updateNetPill();
+}
+let flushing = null;
+function flushOutbox() {
+  if (flushing) return flushing;
+  flushing = (async () => {
+    let q = outbox.get();
+    while (q.length) {
+      const it = q[0];
+      try {
+        await api(it.path, { method: it.method, body: it.body, direct: true });
+      } catch (e) {
+        if (e.offline) break; // continua sem internet: tenta depois
+        toast(`⚠️ Não deu para salvar uma alteração: ${e.message}`);
+      }
+      q = outbox.get().slice(1); outbox.set(q);
+    }
+    updateNetPill();
+  })().finally(() => { flushing = null; });
+  return flushing;
+}
+function updateNetPill() {
+  const n = outbox.get().length;
+  const el = document.getElementById('net');
+  if (!el) return;
+  el.hidden = !n && navigator.onLine;
+  el.textContent = n ? `Sem internet · ${n} ${n === 1 ? 'alteração guardada' : 'alterações guardadas'}` : 'Sem internet';
+}
+addEventListener('online', () => { updateNetPill(); flushOutbox().then(() => S && reload().catch(() => {})); });
+addEventListener('offline', updateNetPill);
+setInterval(() => { if (outbox.get().length && navigator.onLine) flushOutbox(); }, 30000);
+
+async function api(path, { method = 'GET', body, raw, retry = true, direct = false } = {}) {
+  const canQueue = !direct && !raw && method !== 'GET' && QUEUEABLE.test(path);
+  if (canQueue && (!navigator.onLine || outbox.get().length)) { enqueue(path, method, body); flushOutbox(); return { ok: true, queued: true }; }
   const headers = {};
   if (DEV_USER) headers['x-dev-user'] = JSON.stringify(DEV_USER);
   if (raw) headers['content-type'] = raw.type || 'image/jpeg';
   else if (body !== undefined) headers['content-type'] = 'application/json';
-  const res = await fetch(`/api/${path}`, {
-    method, headers, credentials: 'same-origin',
-    body: raw || (body !== undefined ? JSON.stringify(body) : undefined),
-  });
+  let res;
+  try {
+    res = await fetch(`/api/${path}`, {
+      method, headers, credentials: 'same-origin',
+      body: raw || (body !== undefined ? JSON.stringify(body) : undefined),
+    });
+  } catch {
+    if (canQueue) { enqueue(path, method, body); return { ok: true, queued: true }; }
+    const err = new Error('Sem internet'); err.offline = true; throw err;
+  }
   if (res.status === 401 && retry && !DEV_USER) {
     try { await refreshSession(); return api(path, { method, body, raw, retry: false }); } catch { /* sem sessão */ }
     showLogin(); throw new Error('Faça login');
@@ -93,7 +146,19 @@ const abaParam = new URLSearchParams(location.search).get('aba');
 if (['hoje', 'desafios', 'treinos', 'perfil'].includes(abaParam)) tab = abaParam;
 
 async function reload() {
-  const [state] = await Promise.all([api('state'), RUN_ENABLED ? loadRun() : null]);
+  if (outbox.get().length && navigator.onLine) await flushOutbox();
+  if (outbox.get().length && S) { render(); return; } // ainda tem coisa para enviar: mantém o que está na tela
+  let state;
+  try {
+    [state] = await Promise.all([api('state'), RUN_ENABLED ? loadRun() : null]);
+    try { localStorage.setItem('state-cache', JSON.stringify(state)); } catch { /* sem espaço */ }
+  } catch (e) {
+    // Sem internet: abre com a última versão salva no celular
+    const cached = (() => { try { return JSON.parse(localStorage.getItem('state-cache')); } catch { return null; } })();
+    if (!e.offline || !cached || (DEV_USER && cached.me?.id !== DEV_USER.id)) throw e;
+    state = cached;
+    updateNetPill();
+  }
   S = state;
   render();
 }
@@ -2703,12 +2768,14 @@ $view.addEventListener('click', (ev) => {
       const ok = prompt('Isso apaga sua conta e TODOS os seus dados (desafios, treinos, fotos e histórico). Não dá para desfazer.\n\nPara confirmar, digite EXCLUIR:');
       if (ok?.trim().toUpperCase() !== 'EXCLUIR') return;
       return api('me?confirm=EXCLUIR', { method: 'DELETE' })
-        .then(() => { toast('Conta excluída. Até logo 👋', 3000); store.del('dev-user'); return logout().catch(() => {}); })
+        .then(() => { toast('Conta excluída. Até logo 👋', 3000); store.del('dev-user'); store.del('outbox'); localStorage.removeItem('state-cache'); return logout().catch(() => {}); })
         .finally(() => setTimeout(() => location.reload(), 1500));
     }
     case 'logout':
       if (!confirm('Sair da conta?')) return;
+      if (outbox.get().length && !confirm('Tem alterações feitas sem internet que ainda não foram enviadas. Sair mesmo assim?')) return;
       if (DEV_USER) store.del('dev-user');
+      store.del('outbox'); localStorage.removeItem('state-cache');
       return logout().catch(() => {}).finally(() => location.reload());
     default:
   }
