@@ -1059,15 +1059,47 @@ async function openCoachUser(id) {
 function viewCoach() {
   if (coachUser) return coachUserView();
   if (!coachUsers) { loadCoachUsers(); return '<div class="empty">Carregando alunos…</div>'; }
-  const modes = [['alunos', '👥 Alunos'], ['exercicios', '📚 Exercícios'], ...(S.me.owner ? [['treinadores', '🧑‍🏫 Treinadores']] : [])];
+  const modes = [['alunos', 'Alunos'], ['exercicios', 'Exercícios'], ...(S.me.owner ? [['treinadores', 'Treinadores'], ['painel', 'Painel']] : [])];
   if (!modes.some(([v]) => v === coachMode)) coachMode = 'alunos';
   const seg = `<div class="card seg" style="grid-template-columns:repeat(${modes.length},1fr)">
       ${modes.map(([v, l]) => `<button class="${coachMode === v ? 'on' : ''}" data-action="tr-mode" data-v="${v}">${l}</button>`).join('')}
     </div>`;
   if (coachMode === 'exercicios') return seg + catalogView();
+  if (S.me.owner && coachMode === 'painel') return seg + usageView();
   if (S.me.owner && coachMode === 'treinadores') return seg + coachesView();
   const list = coachUsers.filter((u) => u.id !== myId() && !(S.me.owner && u.owner));
   return seg + coachAthletesList(list);
+}
+
+// Painel de uso (dono)
+let usage = null, usageLoading = false;
+async function loadUsage() {
+  if (usageLoading) return;
+  usageLoading = true;
+  try { usage = await api(`coach/stats?today=${todayStr()}`); } catch (e) { usage = { error: e.message }; }
+  usageLoading = false;
+  render();
+}
+function usageView() {
+  if (!usage) { loadUsage(); return '<div class="empty">Carregando painel…</div>'; }
+  if (usage.error) return `<div class="card empty">⚠️ ${esc(usage.error)}</div>`;
+  const u = usage;
+  const lbl = (d) => fmtDate(d, { day: '2-digit', month: '2-digit' });
+  return `
+    <div class="kpis">
+      ${tile('Pessoas no app', u.users, { delta: `+${u.new30} nos últimos 30 dias` })}
+      ${tile('Ativos na semana', `${u.active7}<small> de ${u.users}</small>`, { delta: `${u.active30} ativos em 30 dias` })}
+      ${tile('Novos na semana', u.new7)}
+      ${tile('Treinos na semana', u.weeks[u.weeks.length - 1]?.workouts ?? 0, { delta: 'semana atual' })}
+    </div>
+    <h2>Treinos concluídos por semana</h2>
+    <div class="card">${columns(u.weeks.map((w) => ({ label: lbl(w.start), value: w.workouts, tip: `${w.workouts} treinos|Semana de ${lbl(w.start)}` })), { title: 'Treinos concluídos por semana, últimas 8 semanas' })}</div>
+    <h2>Pessoas ativas por semana</h2>
+    <div class="card">${columns(u.weeks.map((w) => ({ label: lbl(w.start), value: w.active, tip: `${w.active} pessoas|Semana de ${lbl(w.start)}` })), { title: 'Pessoas que marcaram algo por semana, últimas 8 semanas' })}</div>
+    ${u.coaches.length ? `<h2>Por treinador</h2>
+    <div class="card pr-list">${u.coaches.map((c) => `<div class="pr-row"><span class="grow"><b>${esc(c.name)}</b><small>${c.athletes} ${c.athletes === 1 ? 'aluno' : 'alunos'}</small></span><span class="pr-kg">${c.active7}<small> treinaram na semana</small></span></div>`).join('')}</div>` : ''}
+    <h2>Quem entrou por último</h2>
+    <div class="card pr-list">${u.recent.map((r) => `<div class="pr-row"><span class="grow"><b>${esc(r.name || 'Sem nome')}</b><small>${r.coach ? `Treinador: ${esc(firstName(r.coach))}` : 'Sem treinador'}</small></span><span class="muted">${fmtDate(r.day, { day: '2-digit', month: 'short' })}</span></div>`).join('')}</div>`;
 }
 
 // Catálogo: cada exercício com vídeo e dica
@@ -2720,7 +2752,7 @@ $view.addEventListener('click', (ev) => {
     case 'measure-new': return openMeasure();
     case 'summary': return openSummary();
     case 'rank-period': rankPeriod = d.v; teamRank = null; return render();
-    case 'tr-mode': coachMode = d.v; store.set('coach-mode', coachMode); coachUsers = null; return render();
+    case 'tr-mode': coachMode = d.v; store.set('coach-mode', coachMode); coachUsers = null; usage = null; return render();
     case 'tr-pick': return openPickAthletes(d.v);
     case 'tr-invite': return openCoachInvite();
     case 'cat-new': return openCatalogItem();

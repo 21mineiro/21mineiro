@@ -598,6 +598,44 @@ export default async (req: Request, context: Context) => {
         return json({ ok: true });
       }
       // Apagar treinos de um aluno (para trocar pelo treino do treinador)
+      // Painel de uso (só o dono): alunos ativos, treinos por semana, quem entrou
+      if (sub === 'stats' && method === 'GET') {
+        if (!role.owner) return err('Só o dono', 403);
+        const today = isDay(url.searchParams.get('today')) ? url.searchParams.get('today') : new Date().toISOString().slice(0, 10);
+        const [tot] = await sql`
+          SELECT COUNT(*) AS users,
+            COUNT(*) FILTER (WHERE created_at >= ${today}::date - 6) AS new7,
+            COUNT(*) FILTER (WHERE created_at >= ${today}::date - 29) AS new30
+          FROM users`;
+        const activeIn = async (days: number) => Number((await sql`
+          SELECT COUNT(DISTINCT user_id) AS n FROM (
+            SELECT user_id FROM workout_logs WHERE day > ${today}::date - ${days}::int AND day <= ${today}::date
+            UNION SELECT user_id FROM checkins WHERE day > ${today}::date - ${days}::int AND day <= ${today}::date
+          ) x`)[0].n);
+        const weeks = await sql`
+          WITH w AS (SELECT generate_series(0, 7) AS i),
+          b AS (SELECT i, (${today}::date - EXTRACT(DOW FROM ${today}::date)::int - (7 - i) * 7) AS start FROM w)
+          SELECT to_char(b.start, 'YYYY-MM-DD') AS start,
+            (SELECT COUNT(*) FROM workout_logs l WHERE l.finished AND l.day BETWEEN b.start AND b.start + 6) AS workouts,
+            (SELECT COUNT(DISTINCT u) FROM (SELECT user_id AS u FROM workout_logs WHERE day BETWEEN b.start AND b.start + 6
+               UNION SELECT user_id FROM checkins WHERE day BETWEEN b.start AND b.start + 6) z) AS active
+          FROM b ORDER BY b.start`;
+        const coachRows = await sql`
+          SELECT lower(u.coach_email) AS ce, COUNT(*) AS athletes,
+            COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM workout_logs l WHERE l.user_id = u.id AND l.finished AND l.day > ${today}::date - 7)) AS active7
+          FROM users u WHERE u.coach_email IS NOT NULL GROUP BY 1 ORDER BY 2 DESC`;
+        const names = await sql`SELECT lower(email) AS e, name FROM users WHERE lower(email) = ANY(${coachRows.map((r: any) => r.ce)})`;
+        const recent = await sql`
+          SELECT name, to_char(created_at, 'YYYY-MM-DD') AS day, lower(coach_email) AS ce FROM users ORDER BY created_at DESC LIMIT 8`;
+        const nameOf = (e: string) => names.find((n: any) => n.e === e)?.name || e;
+        return json({
+          users: Number(tot.users), new7: Number(tot.new7), new30: Number(tot.new30),
+          active7: await activeIn(7), active30: await activeIn(30),
+          weeks: weeks.map((w: any) => ({ start: w.start, workouts: Number(w.workouts), active: Number(w.active) })),
+          coaches: coachRows.map((r: any) => ({ name: nameOf(r.ce), athletes: Number(r.athletes), active7: Number(r.active7) })),
+          recent: recent.map((r: any) => ({ name: r.name, day: r.day, coach: r.ce ? nameOf(r.ce) : null })),
+        });
+      }
       // Copiar o treino de um aluno para outros (substitui o treino deles)
       if (sub === 'copy' && method === 'POST') {
         const fromId = String(body.fromId || '');
