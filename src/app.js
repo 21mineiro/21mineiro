@@ -775,7 +775,7 @@ function viewCoach() {
       <div class="card athlete" data-action="tr-open" data-id="${u.id}" role="button" tabindex="0">
         <div class="row">
           ${avatar(u, 42)}
-          <div class="grow"><div class="name">${esc(u.name)}</div><div class="muted">${planLabel(u.kinds, u.nworkouts)}</div></div>
+          <div class="grow"><div class="name">${esc(u.name)}${u.coach ? ` <span class="chip on">🧑‍🏫 ${u.owner ? 'Dono' : 'Treinador'}</span>` : ''}</div><div class="muted">${planLabel(u.kinds, u.nworkouts)}</div></div>
           <span class="go-arrow">›</span>
         </div>
         <div class="chips" style="margin-top:10px">
@@ -796,7 +796,14 @@ function coachUserView() {
   const kinds = x.workouts.map((w) => w.id).join(',');
   return `
     <button class="back" data-action="tr-back">← Alunos</button>
-    <div class="card row">${avatar(x.user, 48)}<div class="grow"><div class="name">${esc(x.user.name)}</div><div class="muted">${esc(x.user.email)}</div></div></div>
+    <div class="card row">${avatar(x.user, 48)}<div class="grow"><div class="name">${esc(x.user.name)}</div><div class="muted">${esc(x.user.email)}</div></div>
+      ${x.user.coach ? `<span class="chip on">🧑‍🏫 ${x.user.owner ? 'Dono' : 'Treinador'}</span>` : ''}</div>
+    ${S.me.owner && !x.user.owner ? `
+    <div class="card row">
+      <div class="grow"><div class="name" style="font-size:15px">Acesso de treinador</div>
+        <div class="muted">${x.user.coach ? 'Vê todos os alunos e monta treinos.' : 'Hoje é aluno. Treinador vê todos os alunos e monta treinos.'}</div></div>
+      <button class="btn-small ${x.user.coach ? 'btn-danger' : 'btn-blue'}" data-action="tr-role" data-v="${x.user.coach ? '0' : '1'}">${x.user.coach ? 'Remover' : 'Tornar treinador'}</button>
+    </div>` : ''}
     <div class="kpis">
       ${tile('Treinos', done.filter((l) => l.day >= from30).length, { delta: 'últimos 30 dias' })}
       ${tile('Cardio', `${fmtNum(cardioMin(x.logs, from30))}<small> min</small>`, { delta: 'últimos 30 dias' })}
@@ -2102,6 +2109,14 @@ $view.addEventListener('click', (ev) => {
     case 'tr-new': return coachNewWorkout();
     case 'tr-edit': return openWorkoutForm(coachUser.workouts.find((x) => x.id === d.id), coachCtx());
     case 'tr-apply': return coachApplyProgram();
+    case 'tr-role': {
+      const make = d.v === '1';
+      const name = firstName(coachUser.user.name);
+      if (!confirm(make ? `Tornar ${name} treinador(a)? Vai poder ver todos os alunos e montar treinos.` : `Tirar o acesso de treinador de ${name}?`)) return;
+      return api(`coach/role/${coachUser.user.id}`, { method: 'PUT', body: { coach: make } })
+        .then(() => { toast(make ? `🧑‍🏫 ${name} agora é treinador(a)` : 'Acesso de treinador removido'); openCoachUser(coachUser.user.id); })
+        .catch((e) => toast(`⚠️ ${e.message}`));
+    }
     case 'swap-workout': {
       // Volta para a escolha do treino de hoje (só antes de marcar alguma série)
       S.logs = S.logs.filter((l) => !(l.day === d.day && l.workoutId === d.w));

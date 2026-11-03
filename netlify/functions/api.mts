@@ -42,6 +42,7 @@ async function isMember(challengeId: string, userId: string) {
 /* ---------- Estado completo do usuário ---------- */
 
 async function getState(me: Me) {
+  const role = await roleOf(me.email);
   const [profile] = await sql`SELECT reminder_hour, timezone FROM users WHERE id = ${me.id}`;
 
   const challenges = await sql`
@@ -65,7 +66,7 @@ async function getState(me: Me) {
     FROM workout_logs WHERE user_id = ${me.id} ORDER BY day DESC`;
 
   return {
-    me: { ...me, coach: isCoach(me.email), reminderHour: profile?.reminder_hour ?? null, timezone: profile?.timezone || null },
+    me: { ...me, coach: role.coach, owner: role.owner, reminderHour: profile?.reminder_hour ?? null, timezone: profile?.timezone || null },
     challenges: challenges.map((c: any) => ({
       id: c.id, ownerId: c.owner_id, name: c.name, emoji: c.emoji, kind: c.kind,
       target: num(c.target), unit: c.unit, days: c.days, start: c.start,
@@ -99,6 +100,14 @@ function workoutIn(body: any) {
     ...(e.unit === 'seg' ? { unit: 'seg' } : {}),
   }));
   return { name: String(body.name || 'Treino').slice(0, 80), weekdays, exercises, position: Number(body.position) || 0 };
+}
+
+// Dono = e-mails em COACH_EMAILS (Netlify). Treinador = dono ou alguém que o dono adicionou.
+async function roleOf(email: string) {
+  const owner = isCoach(email);
+  if (owner) return { owner: true, coach: true };
+  const rows = await sql`SELECT 1 FROM coaches WHERE email = ${String(email || '').toLowerCase()}`;
+  return { owner: false, coach: rows.length > 0 };
 }
 
 /* ---------- Desafios ---------- */
@@ -300,7 +309,8 @@ export default async (req: Request, context: Context) => {
 
     /* ----- Área do treinador ----- */
     if (res === 'coach') {
-      if (!isCoach(me.email)) return err('Só para o treinador', 403);
+      const role = await roleOf(me.email);
+      if (!role.coach) return err('Só para o treinador', 403);
       const [, sub, sid] = parts;
       const today = isDay(url.searchParams.get('today')) ? url.searchParams.get('today')! : new Date().toISOString().slice(0, 10);
 
@@ -313,16 +323,19 @@ export default async (req: Request, context: Context) => {
             (SELECT to_char(MAX(l.day), 'YYYY-MM-DD') FROM workout_logs l WHERE l.user_id = u.id AND l.finished) AS last_day,
             (SELECT l.workout_name FROM workout_logs l WHERE l.user_id = u.id AND l.finished ORDER BY l.day DESC LIMIT 1) AS last_name,
             (SELECT string_agg(DISTINCT split_part(w.id, '-', 1) || '-' || split_part(w.id, '-', 2), ',') FROM workouts w WHERE w.user_id = u.id) AS kinds,
-            (SELECT COUNT(*) FROM workouts w WHERE w.user_id = u.id) AS nworkouts
+            (SELECT COUNT(*) FROM workouts w WHERE w.user_id = u.id) AS nworkouts,
+            EXISTS (SELECT 1 FROM coaches k WHERE k.email = lower(u.email)) AS is_coach
           FROM users u ORDER BY last_day DESC NULLS LAST, u.name`;
         return json(rows.map((r: any) => ({
           id: r.id, name: r.name, email: r.email, avatar: r.avatar, w7: Number(r.w7), w30: Number(r.w30), cardio7: Number(r.cardio7),
           lastDay: r.last_day, lastName: r.last_name, kinds: r.kinds || '', nworkouts: Number(r.nworkouts),
+          coach: r.is_coach || isCoach(r.email || ''), owner: isCoach(r.email || ''),
         })));
       }
       if (sub === 'user' && sid && method === 'GET') {
         const [u] = await sql`SELECT id, name, email, avatar FROM users WHERE id = ${sid}`;
         if (!u) return err('Aluno não encontrado', 404);
+        u.coach = (await roleOf(u.email)).coach; u.owner = isCoach(u.email || '');
         const workouts = await sql`SELECT id, name, weekdays, exercises FROM workouts WHERE user_id = ${sid} ORDER BY position, created_at`;
         const logs = await sql`
           SELECT to_char(day, 'YYYY-MM-DD') AS day, workout_id, workout_name, finished, exercises, cardio
@@ -339,6 +352,16 @@ export default async (req: Request, context: Context) => {
           INSERT INTO workouts (id, user_id, name, weekdays, exercises, position)
           VALUES (${sid}, ${body.athleteId}, ${w.name}, ${JSON.stringify(w.weekdays)}::jsonb, ${JSON.stringify(w.exercises)}::jsonb, ${w.position})
           ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, weekdays = EXCLUDED.weekdays, exercises = EXCLUDED.exercises, position = EXCLUDED.position`;
+        return json({ ok: true });
+      }
+      // Só o dono: tornar alguém treinador ou tirar
+      if (sub === 'role' && sid && method === 'PUT') {
+        if (!role.owner) return err('Só o dono do app pode mudar treinadores', 403);
+        const [u] = await sql`SELECT email FROM users WHERE id = ${sid}`;
+        if (!u?.email) return err('Usuário não encontrado', 404);
+        if (isCoach(u.email)) return err('Este é o dono do app');
+        if (body.coach) await sql`INSERT INTO coaches (email, added_by) VALUES (${u.email.toLowerCase()}, ${me.email}) ON CONFLICT DO NOTHING`;
+        else await sql`DELETE FROM coaches WHERE email = ${u.email.toLowerCase()}`;
         return json({ ok: true });
       }
       // Apagar treinos de um aluno (para trocar pelo treino do treinador)
