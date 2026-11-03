@@ -43,7 +43,7 @@ async function isMember(challengeId: string, userId: string) {
 
 async function getState(me: Me) {
   const role = await roleOf(me.email);
-  const [profile] = await sql`SELECT reminder_hour, timezone FROM users WHERE id = ${me.id}`;
+  const [profile] = await sql`SELECT reminder_hour, timezone, coach_email FROM users WHERE id = ${me.id}`;
 
   const challenges = await sql`
     SELECT c.*, to_char(c.start_date, 'YYYY-MM-DD') AS start, m.link_workout
@@ -66,7 +66,7 @@ async function getState(me: Me) {
     FROM workout_logs WHERE user_id = ${me.id} ORDER BY day DESC`;
 
   return {
-    me: { ...me, coach: role.coach, owner: role.owner, reminderHour: profile?.reminder_hour ?? null, timezone: profile?.timezone || null },
+    me: { ...me, coach: role.coach, owner: role.owner, reminderHour: profile?.reminder_hour ?? null, timezone: profile?.timezone || null, coachEmail: profile?.coach_email || null },
     challenges: challenges.map((c: any) => ({
       id: c.id, ownerId: c.owner_id, name: c.name, emoji: c.emoji, kind: c.kind,
       target: num(c.target), unit: c.unit, days: c.days, start: c.start,
@@ -428,6 +428,8 @@ export default async (req: Request, context: Context) => {
         if (!role.owner) return err('Só o dono pode ligar alunos a treinadores', 403);
         const ce = body.coachEmail ? String(body.coachEmail).toLowerCase() : null;
         if (ce && !(await roleOf(ce)).coach) return err('Esse e-mail não é de um treinador');
+        const [target] = await sql`SELECT lower(email) AS email FROM users WHERE id = ${sid}`;
+        if (ce && target?.email === ce) return err('A pessoa não pode ser treinadora dela mesma');
         await sql`UPDATE users SET coach_email = ${ce} WHERE id = ${sid}`;
         return json({ ok: true });
       }

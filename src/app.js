@@ -731,7 +731,19 @@ function viewCoach() {
 
 function coachesView() {
   if (!coachesList?.length) return '<div class="card empty">Nenhum treinador ainda. Abra um aluno na lista e toque em "Tornar treinador".</div>';
-  return `
+  const myEmail = String(S.me.email || '').toLowerCase();
+  const others = coachesList.filter((c) => c.email !== myEmail);
+  const mine = others.length ? `
+    <div class="card">
+      <label class="field">🏋️ Meu treinador
+        <select data-action="my-coach">
+          <option value="">Ninguém, eu monto o meu</option>
+          ${others.map((c) => `<option value="${esc(c.email)}" ${String(S.me.coachEmail || '').toLowerCase() === c.email ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}
+        </select>
+      </label>
+      <div class="muted">Você também treina como aluno: quem você escolher vê seus treinos e monta o seu treino.</div>
+    </div>` : '';
+  return mine + `
     <p class="muted" style="margin:0 4px 12px">Ligue cada aluno a um treinador. O treinador vê e monta treino só para os alunos dele.</p>
     ${coachesList.map((c) => `
       <div class="card">
@@ -805,7 +817,7 @@ function coachUserView() {
     <button class="back" data-action="tr-back">← Alunos</button>
     <div class="card row">${avatar(x.user, 48)}<div class="grow"><div class="name">${esc(x.user.name)}</div><div class="muted">${esc(x.user.email)}</div></div>
       ${x.user.coach ? `<span class="chip on">🧑‍🏫 ${x.user.owner ? 'Dono' : 'Treinador'}</span>` : ''}</div>
-    ${S.me.owner && !x.user.owner && !x.user.coach && coachesList?.length ? `
+    ${S.me.owner && !x.user.owner && coachesList?.length ? `
     <div class="card">
       <label class="field" style="margin:0">Treinador responsável
         <select data-action="tr-assign">
@@ -2222,6 +2234,13 @@ $view.addEventListener('change', (ev) => {
   if (t.dataset.action === 'native-reminder') {
     const hour = t.value === '' ? null : Number(t.value);
     nativeReminder(hour).then((ok) => { if (ok) { store.set('native-reminder', hour); toast(hour === null ? 'Lembrete desligado' : `🔔 Lembrete todo dia às ${String(hour).padStart(2, '0')}:00`); } else render(); });
+    return;
+  }
+  if (t.dataset.action === 'my-coach') {
+    const email = t.value || null;
+    api(`coach/assign/${myId()}`, { method: 'PUT', body: { coachEmail: email } })
+      .then(async () => { S.me.coachEmail = email; toast(email ? `Agora ${firstName(coachName(email))} é seu treinador ✅` : 'Você está sem treinador'); coachesList = await api('coach/coaches'); render(); })
+      .catch((e) => toast(`⚠️ ${e.message}`));
     return;
   }
   if (t.dataset.action === 'tr-assign') {
