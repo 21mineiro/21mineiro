@@ -768,3 +768,10 @@ body { padding-bottom: calc(112px + env(safe-area-inset-bottom)); }
 
 /* Área do treinador */
 .go-arrow { font-size: 26px; color: var(--muted); }
+
+/* Escolher alunos de um treinador */
+.pick-list { display: flex; flex-direction: column; gap: 6px; max-height: 55vh; overflow-y: auto; }
+.pick-row { display: flex; align-items: center; gap: 12px; padding: 11px 12px; border-radius: 14px; background: var(--surface-2); cursor: pointer; }
+.pick-row input { width: 20px; height: 20px; }
+.pick-row b { display: block; font-size: 15px; }
+.pick-row small { color: var(--muted); }

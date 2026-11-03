@@ -313,6 +313,13 @@ export default async (req: Request, context: Context) => {
       if (!role.coach) return err('Só para o treinador', 403);
       const [, sub, sid] = parts;
       const today = isDay(url.searchParams.get('today')) ? url.searchParams.get('today')! : new Date().toISOString().slice(0, 10);
+      const myEmail = String(me.email || '').toLowerCase();
+      // O dono vê todos; o treinador só os alunos ligados a ele
+      const canSee = async (userId: string) => {
+        if (role.owner) return true;
+        const [u] = await sql`SELECT lower(coach_email) AS ce FROM users WHERE id = ${userId}`;
+        return !!u && u.ce === myEmail;
+      };
 
       if (sub === 'users' && method === 'GET') {
         const rows = await sql`
@@ -324,16 +331,20 @@ export default async (req: Request, context: Context) => {
             (SELECT l.workout_name FROM workout_logs l WHERE l.user_id = u.id AND l.finished ORDER BY l.day DESC LIMIT 1) AS last_name,
             (SELECT string_agg(DISTINCT split_part(w.id, '-', 1) || '-' || split_part(w.id, '-', 2), ',') FROM workouts w WHERE w.user_id = u.id) AS kinds,
             (SELECT COUNT(*) FROM workouts w WHERE w.user_id = u.id) AS nworkouts,
-            EXISTS (SELECT 1 FROM coaches k WHERE k.email = lower(u.email)) AS is_coach
-          FROM users u ORDER BY last_day DESC NULLS LAST, u.name`;
+            EXISTS (SELECT 1 FROM coaches k WHERE k.email = lower(u.email)) AS is_coach,
+            lower(u.coach_email) AS coach_email
+          FROM users u
+          WHERE ${role.owner} OR lower(u.coach_email) = ${myEmail}
+          ORDER BY last_day DESC NULLS LAST, u.name`;
         return json(rows.map((r: any) => ({
           id: r.id, name: r.name, email: r.email, avatar: r.avatar, w7: Number(r.w7), w30: Number(r.w30), cardio7: Number(r.cardio7),
           lastDay: r.last_day, lastName: r.last_name, kinds: r.kinds || '', nworkouts: Number(r.nworkouts),
-          coach: r.is_coach || isCoach(r.email || ''), owner: isCoach(r.email || ''),
+          coach: r.is_coach || isCoach(r.email || ''), owner: isCoach(r.email || ''), coachEmail: r.coach_email || null,
         })));
       }
       if (sub === 'user' && sid && method === 'GET') {
-        const [u] = await sql`SELECT id, name, email, avatar FROM users WHERE id = ${sid}`;
+        if (!(await canSee(sid))) return err('Este aluno não é seu', 403);
+        const [u] = await sql`SELECT id, name, email, avatar, lower(coach_email) AS "coachEmail" FROM users WHERE id = ${sid}`;
         if (!u) return err('Aluno não encontrado', 404);
         u.coach = (await roleOf(u.email)).coach; u.owner = isCoach(u.email || '');
         const workouts = await sql`SELECT id, name, weekdays, exercises FROM workouts WHERE user_id = ${sid} ORDER BY position, created_at`;
@@ -345,6 +356,7 @@ export default async (req: Request, context: Context) => {
       // Treinos montados pelo treinador para um aluno (id começa com "co-")
       if (sub === 'workouts' && sid && method === 'PUT') {
         if (!sid.startsWith('co-') || !body.athleteId) return err('Dados inválidos');
+        if (!(await canSee(body.athleteId))) return err('Este aluno não é seu', 403);
         const w = workoutIn(body);
         const [owner] = await sql`SELECT user_id FROM workouts WHERE id = ${sid}`;
         if (owner && owner.user_id !== body.athleteId) return err('Sem acesso', 403);
@@ -361,11 +373,37 @@ export default async (req: Request, context: Context) => {
         if (!u?.email) return err('Usuário não encontrado', 404);
         if (isCoach(u.email)) return err('Este é o dono do app');
         if (body.coach) await sql`INSERT INTO coaches (email, added_by) VALUES (${u.email.toLowerCase()}, ${me.email}) ON CONFLICT DO NOTHING`;
-        else await sql`DELETE FROM coaches WHERE email = ${u.email.toLowerCase()}`;
+        else {
+          await sql`DELETE FROM coaches WHERE email = ${u.email.toLowerCase()}`;
+          await sql`UPDATE users SET coach_email = NULL WHERE lower(coach_email) = ${u.email.toLowerCase()}`;
+        }
+        return json({ ok: true });
+      }
+      // Só o dono: lista de treinadores com seus alunos
+      if (sub === 'coaches' && method === 'GET') {
+        if (!role.owner) return err('Só o dono', 403);
+        const extra = (await sql`SELECT email FROM coaches`).map((r: any) => r.email);
+        const owners = (Netlify.env.get('COACH_EMAILS') || '').split(',').map((e) => e.trim().toLowerCase()).filter(Boolean);
+        const emails = [...new Set([...owners, ...extra])];
+        const users = await sql`SELECT id, name, email, avatar, lower(coach_email) AS ce FROM users`;
+        return json(emails.map((e) => {
+          const u = users.find((x: any) => String(x.email || '').toLowerCase() === e);
+          return { email: e, name: u?.name || e, avatar: u?.avatar || null, owner: owners.includes(e),
+            athletes: users.filter((x: any) => x.ce === e).map((x: any) => ({ id: x.id, name: x.name })) };
+        }));
+      }
+      // Só o dono: ligar um aluno a um treinador (ou tirar)
+      if (sub === 'assign' && sid && method === 'PUT') {
+        if (!role.owner) return err('Só o dono pode ligar alunos a treinadores', 403);
+        const ce = body.coachEmail ? String(body.coachEmail).toLowerCase() : null;
+        if (ce && !(await roleOf(ce)).coach) return err('Esse e-mail não é de um treinador');
+        await sql`UPDATE users SET coach_email = ${ce} WHERE id = ${sid}`;
         return json({ ok: true });
       }
       // Apagar treinos de um aluno (para trocar pelo treino do treinador)
       if (sub === 'workouts' && sid && method === 'DELETE') {
+        const [w] = await sql`SELECT user_id FROM workouts WHERE id = ${sid}`;
+        if (w && !(await canSee(w.user_id))) return err('Este aluno não é seu', 403);
         await sql`DELETE FROM workouts WHERE id = ${sid}`;
         return json({ ok: true });
       }

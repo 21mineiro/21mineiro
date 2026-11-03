@@ -744,16 +744,21 @@ const cardioMin = (logs, from) => logs.filter((l) => l.cardio?.done && (!from ||
 
 /* ================= Área do treinador ================= */
 
-let coachUsers = null, coachUser = null;
+let coachUsers = null, coachUser = null, coachesList = null;
+let coachMode = store.get('coach-mode', 'alunos'); // alunos | treinadores (só o dono)
 const firstName = (n) => String(n || '').split(' ')[0];
 const ago = (d) => { const n = diffDays(d, todayStr()); return n <= 0 ? 'hoje' : n === 1 ? 'ontem' : `há ${n} dias`; };
 const planLabel = (kinds, n) => (kinds.includes('co-') ? '🧑‍🏫 Treino do treinador' : kinds.includes('pg-completo') ? '🏋️ Treino Completo'
   : kinds.includes('pg-corrida') ? '🏃 Fortalecimento p/ corrida' : n ? '✍️ Treino próprio' : 'Ainda sem treino');
 
 async function loadCoachUsers() {
-  try { coachUsers = await api(`coach/users?today=${todayStr()}`); } catch (e) { coachUsers = []; toast(`⚠️ ${e.message}`); }
+  try {
+    const [users, coaches] = await Promise.all([api(`coach/users?today=${todayStr()}`), S.me.owner ? api('coach/coaches') : null]);
+    coachUsers = users; coachesList = coaches;
+  } catch (e) { coachUsers = []; toast(`⚠️ ${e.message}`); }
   render();
 }
+const coachName = (email) => coachesList?.find((c) => c.email === email)?.name || email;
 async function openCoachUser(id) {
   try { coachUser = await api(`coach/user/${id}?today=${todayStr()}`); render(); window.scrollTo(0, 0); } catch (e) { toast(`⚠️ ${e.message}`); }
 }
@@ -761,7 +766,53 @@ async function openCoachUser(id) {
 function viewCoach() {
   if (coachUser) return coachUserView();
   if (!coachUsers) { loadCoachUsers(); return '<div class="empty">Carregando alunos…</div>'; }
-  const list = coachUsers.filter((u) => u.id !== myId());
+  const seg = S.me.owner ? `<div class="card seg" style="grid-template-columns:1fr 1fr">
+      ${[['alunos', '👥 Alunos'], ['treinadores', '🧑‍🏫 Treinadores']].map(([v, l]) => `<button class="${coachMode === v ? 'on' : ''}" data-action="tr-mode" data-v="${v}">${l}</button>`).join('')}
+    </div>` : '';
+  if (S.me.owner && coachMode === 'treinadores') return seg + coachesView();
+  const list = coachUsers.filter((u) => u.id !== myId() && !(S.me.owner && u.owner));
+  return seg + coachAthletesList(list);
+}
+
+function coachesView() {
+  if (!coachesList?.length) return '<div class="card empty">Nenhum treinador ainda. Abra um aluno na lista e toque em "Tornar treinador".</div>';
+  return `
+    <p class="muted" style="margin:0 4px 12px">Ligue cada aluno a um treinador. O treinador vê e monta treino só para os alunos dele.</p>
+    ${coachesList.map((c) => `
+      <div class="card">
+        <div class="row">
+          ${avatar(c, 42)}
+          <div class="grow"><div class="name">${esc(c.name)} ${c.owner ? '<span class="chip on">Dono</span>' : ''}</div><div class="muted">${esc(c.email)}</div></div>
+          <b style="font-size:22px">${c.athletes.length}</b>
+        </div>
+        <div class="chips" style="margin-top:10px">${c.athletes.length ? c.athletes.map((a) => `<span class="chip">${esc(a.name)}</span>`).join('') : '<span class="muted">Ainda sem alunos</span>'}</div>
+        <button class="btn-block" style="margin-top:12px" data-action="tr-pick" data-v="${esc(c.email)}">👥 Escolher alunos</button>
+      </div>`).join('')}
+    ${(() => { const free = coachUsers.filter((u) => !u.coachEmail && !u.owner && !u.coach); return free.length ? `<h2>Sem treinador · ${free.length}</h2><div class="card"><div class="chips">${free.map((u) => `<span class="chip">${esc(u.name)}</span>`).join('')}</div></div>` : ''; })()}`;
+}
+
+// Modal: marcar quais alunos ficam com um treinador
+function openPickAthletes(email) {
+  const c = coachesList.find((x) => x.email === email);
+  const people = coachUsers.filter((u) => !u.owner && String(u.email || '').toLowerCase() !== email);
+  openModal(`
+    <h3>Alunos de ${esc(firstName(c.name))}</h3>
+    <div class="muted" style="margin:-6px 0 10px">Marque quem fica com este treinador.</div>
+    <div class="pick-list">
+      ${people.map((u) => `<label class="pick-row"><input type="checkbox" name="ath" value="${u.id}" ${u.coachEmail === email ? 'checked' : ''}>
+        <span class="grow"><b>${esc(u.name)}</b><small>${u.coachEmail && u.coachEmail !== email ? `hoje com ${esc(coachName(u.coachEmail))}` : u.coachEmail === email ? 'já é aluno(a)' : 'sem treinador'}</small></span></label>`).join('') || '<div class="muted">Ninguém entrou no app ainda.</div>'}
+    </div>
+    <div class="actions"><button value="cancel" formnovalidate>Cancelar</button><button class="btn-primary" value="ok">Salvar</button></div>`, {
+    onSubmit(f) {
+      const chosen = new Set(f.getAll('ath'));
+      const changes = people.filter((u) => chosen.has(u.id) !== (u.coachEmail === email))
+        .map((u) => api(`coach/assign/${u.id}`, { method: 'PUT', body: { coachEmail: chosen.has(u.id) ? email : null } }));
+      Promise.all(changes).then(() => { toast('Alunos atualizados ✅'); coachUsers = null; render(); }).catch((e) => toast(`⚠️ ${e.message}`));
+    },
+  });
+}
+
+function coachAthletesList(list) {
   const active7 = list.filter((u) => u.w7 > 0).length;
   return `
     <div class="kpis">
@@ -782,9 +833,10 @@ function viewCoach() {
           <span class="chip ${u.w7 ? 'ok' : ''}">${u.w7} ${u.w7 === 1 ? 'treino' : 'treinos'} · 7 dias</span>
           <span class="chip">${u.w30} · 30 dias</span>
           ${u.cardio7 ? `<span class="chip">🫀 ${u.cardio7} min cardio</span>` : ''}
+          ${S.me.owner && !u.coach ? `<span class="chip ${u.coachEmail ? 'on' : ''}">${u.coachEmail ? `🧑‍🏫 ${esc(firstName(coachName(u.coachEmail)))}` : 'Sem treinador'}</span>` : ''}
         </div>
         <div class="muted" style="margin-top:8px">${u.lastDay ? `Último: ${esc(u.lastName || 'treino')} · ${ago(u.lastDay)}` : 'Ainda não registrou treino'}</div>
-      </div>`).join('') : '<div class="card empty"><div class="big">🧑‍🏫</div>Quando seus alunos entrarem no app, eles aparecem aqui.</div>'}`;
+      </div>`).join('') : `<div class="card empty"><div class="big">🧑‍🏫</div>${S.me.owner ? 'Quando seus alunos entrarem no app, eles aparecem aqui.' : 'Quando o dono do app ligar alunos a você, eles aparecem aqui.'}</div>`}`;
 }
 
 function coachUserView() {
@@ -798,6 +850,15 @@ function coachUserView() {
     <button class="back" data-action="tr-back">← Alunos</button>
     <div class="card row">${avatar(x.user, 48)}<div class="grow"><div class="name">${esc(x.user.name)}</div><div class="muted">${esc(x.user.email)}</div></div>
       ${x.user.coach ? `<span class="chip on">🧑‍🏫 ${x.user.owner ? 'Dono' : 'Treinador'}</span>` : ''}</div>
+    ${S.me.owner && !x.user.owner && !x.user.coach && coachesList?.length ? `
+    <div class="card">
+      <label class="field" style="margin:0">Treinador responsável
+        <select data-action="tr-assign">
+          <option value="">Sem treinador</option>
+          ${coachesList.filter((c) => c.email !== String(x.user.email || '').toLowerCase()).map((c) => `<option value="${esc(c.email)}" ${x.user.coachEmail === c.email ? 'selected' : ''}>${esc(c.name)}${c.owner ? ' (você)' : ''}</option>`).join('')}
+        </select>
+      </label>
+    </div>` : ''}
     ${S.me.owner && !x.user.owner ? `
     <div class="card row">
       <div class="grow"><div class="name" style="font-size:15px">Acesso de treinador</div>
@@ -2109,12 +2170,14 @@ $view.addEventListener('click', (ev) => {
     case 'tr-new': return coachNewWorkout();
     case 'tr-edit': return openWorkoutForm(coachUser.workouts.find((x) => x.id === d.id), coachCtx());
     case 'tr-apply': return coachApplyProgram();
+    case 'tr-mode': coachMode = d.v; store.set('coach-mode', coachMode); coachUsers = null; return render();
+    case 'tr-pick': return openPickAthletes(d.v);
     case 'tr-role': {
       const make = d.v === '1';
       const name = firstName(coachUser.user.name);
       if (!confirm(make ? `Tornar ${name} treinador(a)? Vai poder ver todos os alunos e montar treinos.` : `Tirar o acesso de treinador de ${name}?`)) return;
       return api(`coach/role/${coachUser.user.id}`, { method: 'PUT', body: { coach: make } })
-        .then(() => { toast(make ? `🧑‍🏫 ${name} agora é treinador(a)` : 'Acesso de treinador removido'); openCoachUser(coachUser.user.id); })
+        .then(async () => { toast(make ? `🧑‍🏫 ${name} agora é treinador(a)` : 'Acesso de treinador removido'); if (S.me.owner) coachesList = await api('coach/coaches'); openCoachUser(coachUser.user.id); })
         .catch((e) => toast(`⚠️ ${e.message}`));
     }
     case 'swap-workout': {
@@ -2160,6 +2223,13 @@ $view.addEventListener('change', (ev) => {
   if (t.dataset.action === 'reminder-hour') {
     const hour = t.value === '' ? null : Number(t.value);
     setReminder(hour).then(() => toast(hour === null ? 'Lembrete desligado' : `Lembrete às ${String(hour).padStart(2, '0')}:00`)).catch((e) => toast(`⚠️ ${e.message}`));
+    return;
+  }
+  if (t.dataset.action === 'tr-assign') {
+    const email = t.value || null;
+    api(`coach/assign/${coachUser.user.id}`, { method: 'PUT', body: { coachEmail: email } })
+      .then(async () => { toast(email ? `Ligado a ${firstName(coachName(email))} ✅` : 'Agora sem treinador'); coachesList = await api('coach/coaches'); openCoachUser(coachUser.user.id); })
+      .catch((e) => toast(`⚠️ ${e.message}`));
     return;
   }
   if (t.dataset.action === 'cardio-field') {
