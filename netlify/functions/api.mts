@@ -101,6 +101,8 @@ function workoutIn(body: any) {
     id: String(e.id || rid()), name: String(e.name || '').slice(0, 80),
     sets: Number(e.sets) || 0, reps: Number(e.reps) || 0, weight: Number(e.weight) || 0,
     ...(e.unit === 'seg' ? { unit: 'seg' } : {}),
+    ...(/^https?:\/\//i.test(String(e.video || '')) ? { video: String(e.video).trim().slice(0, 300) } : {}),
+    ...(e.tip ? { tip: String(e.tip).trim().slice(0, 240) } : {}),
   }));
   return { name: String(body.name || 'Treino').slice(0, 80), weekdays, exercises, position: Number(body.position) || 0 };
 }

@@ -409,6 +409,7 @@ function workoutCard(day, w) {
             <button class="btn-small" data-action="set-add" data-w="${w.id}" data-e="${ei}" data-day="${day}" aria-label="Adicionar série">+</button>
           </div>
         </div>
+        ${howTo(e, w)}
         ${e.sets.map((s, si) => setRow(day, w, ei, si, s, e.unit || w.exercises.find((x) => x.id === e.exId)?.unit)).join('')}
       </div>`;
     }).join('')}
@@ -1283,17 +1284,34 @@ function removeCheck(c, day) {
   save(api(`checkins?challengeId=${encodeURIComponent(c.id)}&day=${day}`, { method: 'DELETE' }));
 }
 
+// "Como fazer": vídeo do treinador ou busca no YouTube, mais a dica
+function howTo(e, w) {
+  const src = w.exercises.find((x) => x.id === e.exId) || w.exercises.find((x) => x.name === e.name) || {};
+  const url = src.video || `https://www.youtube.com/results?search_query=${encodeURIComponent(`${e.name} execução correta`)}`;
+  return `<div class="howto">
+    <a href="${esc(url)}" target="_blank" rel="noopener" class="howto-btn">▶ Como fazer</a>
+    ${src.tip ? `<span class="howto-tip">💡 ${esc(src.tip)}</span>` : ''}
+  </div>`;
+}
+
 // coach: { athleteId, list, done } quando o treinador monta o treino de um aluno
 function openWorkoutForm(w, coach = null) {
   const isNew = !w;
   w = w || { id: coach ? `co-${uid().slice(0, 13)}` : uid(), name: '', weekdays: [], exercises: [] };
   const exRow = (e = {}) => `
-    <div class="ex-edit" data-exid="${e.id || ''}" data-unit="${e.unit || ''}">
-      <input name="ex-name" placeholder="Exercício" value="${esc(e.name || '')}">
-      <input name="ex-sets" type="number" inputmode="numeric" min="1" value="${e.sets ?? 3}" aria-label="Séries">
-      <input name="ex-reps" type="number" inputmode="numeric" min="0" value="${e.reps ?? 12}" aria-label="Repetições">
-      <input name="ex-weight" type="number" inputmode="decimal" min="0" step="0.5" value="${e.weight ?? 0}" aria-label="Carga">
-      <button type="button" data-m="rm-ex" aria-label="Remover">✕</button>
+    <div class="ex-item" data-exid="${e.id || ''}" data-unit="${e.unit || ''}">
+      <div class="ex-edit">
+        <input name="ex-name" placeholder="Exercício" value="${esc(e.name || '')}">
+        <input name="ex-sets" type="number" inputmode="numeric" min="1" value="${e.sets ?? 3}" aria-label="Séries">
+        <input name="ex-reps" type="number" inputmode="numeric" min="0" value="${e.reps ?? 12}" aria-label="Repetições">
+        <input name="ex-weight" type="number" inputmode="decimal" min="0" step="0.5" value="${e.weight ?? 0}" aria-label="Carga">
+        <button type="button" data-m="rm-ex" aria-label="Remover">✕</button>
+      </div>
+      <button type="button" class="btn-link ex-more-btn" data-m="ex-more" ${e.video || e.tip ? 'hidden' : ''}>▶ Vídeo e dica</button>
+      <div class="ex-extra" ${e.video || e.tip ? '' : 'hidden'}>
+        <input name="ex-video" type="url" inputmode="url" placeholder="Link do vídeo (YouTube, Instagram…)" value="${esc(e.video || '')}">
+        <input name="ex-tip" maxlength="240" placeholder="Dica: ex. costas retas, desce devagar" value="${esc(e.tip || '')}">
+      </div>
     </div>`;
   openModal(`
     <h3>${isNew ? 'Novo treino' : 'Editar treino'}${coach ? ` <small class="muted">· para ${esc(coach.name)}</small>` : ''}</h3>
@@ -1319,6 +1337,8 @@ function openWorkoutForm(w, coach = null) {
         reps: Number(row.querySelector('[name=ex-reps]').value) || 0,
         weight: Number(row.querySelector('[name=ex-weight]').value) || 0,
         ...(row.dataset.unit ? { unit: row.dataset.unit } : {}),
+        ...(row.querySelector('[name=ex-video]').value.trim() ? { video: row.querySelector('[name=ex-video]').value.trim() } : {}),
+        ...(row.querySelector('[name=ex-tip]').value.trim() ? { tip: row.querySelector('[name=ex-tip]').value.trim() } : {}),
       })).filter((e) => e.name);
       Object.assign(w, { name: f.get('name').trim(), weekdays: f.getAll('wd').map(Number), exercises });
       if (coach) {
@@ -1336,7 +1356,8 @@ function openWorkoutForm(w, coach = null) {
       if (!t) return;
       const list = $('#ex-list');
       if (t.dataset.m === 'add-ex') { list.insertAdjacentHTML('beforeend', exRow()); list.lastElementChild.querySelector('input').focus(); }
-      if (t.dataset.m === 'rm-ex') t.parentElement.remove();
+      if (t.dataset.m === 'rm-ex') t.closest('.ex-item').remove();
+      if (t.dataset.m === 'ex-more') { t.hidden = true; const x = t.nextElementSibling; x.hidden = false; x.querySelector('input').focus(); }
       if (t.dataset.m === 'delete' && confirm(`Excluir "${w.name}"? O histórico será mantido.`)) {
         if (coach) {
           $modal.close();

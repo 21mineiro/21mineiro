@@ -504,6 +504,14 @@ dialog h3 { margin: 0 0 14px; font-size: 20px; }
 .ex-edit input { padding: 8px 6px; }
 .ex-edit button { padding: 7px 0; }
 .ex-head { font-size: 11px; color: var(--muted); }
+.ex-item { margin-bottom: 10px; }
+.ex-item .ex-edit { margin-bottom: 2px; }
+.ex-more-btn { font-size: 12px; padding: 2px 0; }
+.ex-extra { display: grid; gap: 6px; margin: 4px 0 2px; padding-left: 10px; border-left: 2px solid var(--line); }
+.ex-extra input { padding: 8px; font-size: 14px; }
+.howto { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin: 2px 0 8px; }
+.howto-btn { font-size: 12px; font-weight: 600; text-decoration: none; padding: 4px 10px; border-radius: 999px; color: var(--link); background: var(--accent-soft); }
+.howto-tip { font-size: 13px; color: var(--muted); }
 .wk-ico {
   width: 42px; height: 42px; border-radius: 14px; flex: none; display: grid; place-items: center;
   background: var(--grad); color: #fff; font-size: 20px; box-shadow: var(--glow);
